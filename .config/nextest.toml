@@ -1,0 +1,4 @@
+[profile.ci]
+# Produce JUnit XML output for CI systems
+junit.path = "target/nextest/ci/junit.xml"
+fail-fast = false
