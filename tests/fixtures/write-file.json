@@ -1,0 +1,13 @@
+{
+  "sessionId": "sess-fixture-004",
+  "transcriptPath": "/Users/test/.claude/projects/my-project/transcript.jsonl",
+  "cwd": "/Users/test/code/my-project",
+  "permissionMode": "dontAsk",
+  "hookEventName": "PreToolUse",
+  "toolName": "Write",
+  "toolInput": {
+    "file_path": "/Users/test/code/my-project/output.txt",
+    "content": "Hello, world!\n"
+  },
+  "toolUseId": "toolu_04JKL012"
+}

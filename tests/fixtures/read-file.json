@@ -1,0 +1,12 @@
+{
+  "sessionId": "sess-fixture-003",
+  "transcriptPath": "/Users/test/.claude/projects/my-project/transcript.jsonl",
+  "cwd": "/Users/test/code/my-project",
+  "permissionMode": "acceptEdits",
+  "hookEventName": "PreToolUse",
+  "toolName": "Read",
+  "toolInput": {
+    "file_path": "/Users/test/code/my-project/src/main.rs"
+  },
+  "toolUseId": "toolu_03GHI789"
+}

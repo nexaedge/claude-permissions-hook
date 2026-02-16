@@ -1,0 +1,14 @@
+{
+  "sessionId": "sess-fixture-005",
+  "transcriptPath": "/Users/test/.claude/projects/my-project/transcript.jsonl",
+  "cwd": "/Users/test/code/my-project",
+  "permissionMode": "bypassPermissions",
+  "hookEventName": "PreToolUse",
+  "toolName": "Edit",
+  "toolInput": {
+    "file_path": "/Users/test/code/my-project/src/lib.rs",
+    "old_string": "fn old_name()",
+    "new_string": "fn new_name()"
+  },
+  "toolUseId": "toolu_05MNO345"
+}

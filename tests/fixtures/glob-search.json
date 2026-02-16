@@ -1,0 +1,13 @@
+{
+  "sessionId": "sess-fixture-006",
+  "transcriptPath": "/Users/test/.claude/projects/my-project/transcript.jsonl",
+  "cwd": "/Users/test/code/my-project",
+  "permissionMode": "default",
+  "hookEventName": "PreToolUse",
+  "toolName": "Glob",
+  "toolInput": {
+    "pattern": "**/*.rs",
+    "path": "/Users/test/code/my-project/src"
+  },
+  "toolUseId": "toolu_06PQR678"
+}

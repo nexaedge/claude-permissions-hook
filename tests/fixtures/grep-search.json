@@ -1,0 +1,14 @@
+{
+  "sessionId": "sess-fixture-007",
+  "transcriptPath": "/Users/test/.claude/projects/my-project/transcript.jsonl",
+  "cwd": "/Users/test/code/my-project",
+  "permissionMode": "plan",
+  "hookEventName": "PreToolUse",
+  "toolName": "Grep",
+  "toolInput": {
+    "pattern": "fn\\s+main",
+    "path": "/Users/test/code/my-project/src",
+    "type": "rust"
+  },
+  "toolUseId": "toolu_07STU901"
+}

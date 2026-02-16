@@ -1,0 +1,13 @@
+{
+  "sessionId": "sess-fixture-002",
+  "transcriptPath": "/Users/test/.claude/projects/my-project/transcript.jsonl",
+  "cwd": "/Users/test/code/my-project",
+  "permissionMode": "plan",
+  "hookEventName": "PreToolUse",
+  "toolName": "Bash",
+  "toolInput": {
+    "command": "git status",
+    "description": "Show working tree status"
+  },
+  "toolUseId": "toolu_02DEF456"
+}

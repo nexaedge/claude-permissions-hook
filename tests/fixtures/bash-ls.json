@@ -1,0 +1,12 @@
+{
+  "sessionId": "sess-fixture-001",
+  "transcriptPath": "/Users/test/.claude/projects/my-project/transcript.jsonl",
+  "cwd": "/Users/test/code/my-project",
+  "permissionMode": "default",
+  "hookEventName": "PreToolUse",
+  "toolName": "Bash",
+  "toolInput": {
+    "command": "ls -la"
+  },
+  "toolUseId": "toolu_01ABC123"
+}
