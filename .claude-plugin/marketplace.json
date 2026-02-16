@@ -1,0 +1,10 @@
+{
+  "name": "jaisonerick-claude-plugins",
+  "plugins": [
+    {
+      "name": "claude-permissions-hook",
+      "source": { "source": "npm", "package": "claude-permissions-hook" },
+      "description": "Granular permission control for Claude Code tools"
+    }
+  ]
+}

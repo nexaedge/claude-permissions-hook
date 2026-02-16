@@ -1,0 +1,15 @@
+{
+  "name": "claude-permissions-hook-linux-x64",
+  "version": "0.1.0",
+  "description": "Platform binary for claude-permissions-hook (Linux x64)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jaisonerick/claude-permissions-hook"
+  },
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "bin": {
+    "claude-permissions-hook": "bin/claude-permissions-hook"
+  }
+}

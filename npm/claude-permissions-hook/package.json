@@ -1,0 +1,22 @@
+{
+  "name": "claude-permissions-hook",
+  "version": "0.1.0",
+  "description": "Granular permission control for Claude Code tools",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jaisonerick/claude-permissions-hook"
+  },
+  "bin": {
+    "claude-permissions-hook": "bin/claude-permissions-hook"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "optionalDependencies": {
+    "claude-permissions-hook-darwin-arm64": "0.1.0",
+    "claude-permissions-hook-darwin-x64": "0.1.0",
+    "claude-permissions-hook-linux-x64": "0.1.0",
+    "claude-permissions-hook-linux-arm64": "0.1.0"
+  }
+}
