@@ -1,18 +1,36 @@
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use tempfile::NamedTempFile;
 
-/// Path to the compiled binary.
+// ---- Test helpers ----
+
 fn binary_path() -> PathBuf {
-    // cargo test builds to target/debug; env gives us the exact directory
     let path = PathBuf::from(env!("CARGO_BIN_EXE_claude-permissions-hook"));
     assert!(path.exists(), "binary not found at {}", path.display());
     path
 }
 
-/// Run the hook subcommand with the given stdin input, returning stdout and exit code.
 fn run_hook(stdin_input: &str) -> (String, i32) {
-    let output: Output = Command::new(binary_path())
-        .arg("hook")
+    run_hook_args(stdin_input, &[])
+}
+
+fn run_hook_with_config(stdin_input: &str, config_content: &str) -> (String, i32) {
+    let mut tmpfile = NamedTempFile::new().expect("failed to create temp config");
+    tmpfile
+        .write_all(config_content.as_bytes())
+        .expect("failed to write config");
+    let config_path = tmpfile.path().to_str().unwrap().to_string();
+    run_hook_args(stdin_input, &["--config", &config_path])
+}
+
+fn run_hook_args(stdin_input: &str, extra_args: &[&str]) -> (String, i32) {
+    let mut cmd = Command::new(binary_path());
+    cmd.arg("hook");
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    let output: Output = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -34,7 +52,6 @@ fn run_hook(stdin_input: &str) -> (String, i32) {
     (stdout, exit_code)
 }
 
-/// Load a fixture file from tests/fixtures/.
 fn load_fixture(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
@@ -43,7 +60,6 @@ fn load_fixture(name: &str) -> String {
         .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", path.display()))
 }
 
-/// Parse the JSON output and extract the decision and reason.
 fn parse_output(stdout: &str) -> (String, String) {
     let value: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("stdout should be valid JSON");
@@ -59,166 +75,209 @@ fn parse_output(stdout: &str) -> (String, String) {
     (decision, reason)
 }
 
-// ---- Fixture-based tests ----
-
-#[test]
-fn fixture_bash_ls_default_mode_returns_ask() {
-    let input = load_fixture("bash-ls.json");
-    let (stdout, exit_code) = run_hook(&input);
-    assert_eq!(exit_code, 0);
-    let (decision, reason) = parse_output(&stdout);
-    assert_eq!(decision, "ask");
-    assert!(!reason.is_empty());
-}
-
-#[test]
-fn fixture_bash_git_status_plan_mode_returns_ask() {
-    let input = load_fixture("bash-git-status.json");
-    let (stdout, exit_code) = run_hook(&input);
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "ask");
-}
-
-#[test]
-fn fixture_read_file_accept_edits_returns_ask() {
-    let input = load_fixture("read-file.json");
-    let (stdout, exit_code) = run_hook(&input);
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "ask");
-}
-
-#[test]
-fn fixture_write_file_dont_ask_returns_deny() {
-    let input = load_fixture("write-file.json");
-    let (stdout, exit_code) = run_hook(&input);
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "deny");
-}
-
-#[test]
-fn fixture_edit_file_bypass_permissions_returns_allow() {
-    let input = load_fixture("edit-file.json");
-    let (stdout, exit_code) = run_hook(&input);
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "allow");
-}
-
-#[test]
-fn fixture_glob_search_default_mode_returns_ask() {
-    let input = load_fixture("glob-search.json");
-    let (stdout, exit_code) = run_hook(&input);
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "ask");
-}
-
-#[test]
-fn fixture_grep_search_plan_mode_returns_ask() {
-    let input = load_fixture("grep-search.json");
-    let (stdout, exit_code) = run_hook(&input);
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "ask");
-}
-
-// ---- All permission modes end-to-end ----
-
-fn make_input_with_mode(mode: &str) -> String {
+fn make_input_json(tool_name: &str, mode: &str, tool_input: serde_json::Value) -> String {
     serde_json::json!({
         "sessionId": "sess-e2e-test",
         "transcriptPath": "/tmp/transcript.json",
         "cwd": "/tmp/test",
         "permissionMode": mode,
         "hookEventName": "PreToolUse",
-        "toolName": "Bash",
-        "toolInput": {"command": "echo test"},
+        "toolName": tool_name,
+        "toolInput": tool_input,
         "toolUseId": "toolu_e2e"
     })
     .to_string()
 }
 
-#[test]
-fn e2e_default_mode_returns_ask() {
-    let (stdout, exit_code) = run_hook(&make_input_with_mode("default"));
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "ask");
+fn bash_input_json(command: &str, mode: &str) -> String {
+    make_input_json("Bash", mode, serde_json::json!({"command": command}))
 }
 
-#[test]
-fn e2e_plan_mode_returns_ask() {
-    let (stdout, exit_code) = run_hook(&make_input_with_mode("plan"));
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "ask");
+fn assert_empty_json(stdout: &str) {
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(value, serde_json::json!({}));
 }
 
-#[test]
-fn e2e_accept_edits_mode_returns_ask() {
-    let (stdout, exit_code) = run_hook(&make_input_with_mode("acceptEdits"));
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "ask");
+// ---- Test macros ----
+
+/// No-config fixture: loads a JSON fixture, runs without --config, expects "ask".
+macro_rules! no_config_fixture_test {
+    ($name:ident, fixture: $fixture:expr) => {
+        #[test]
+        fn $name() {
+            let (stdout, exit_code) = run_hook(&load_fixture($fixture));
+            assert_eq!(exit_code, 0);
+            let (decision, _) = parse_output(&stdout);
+            assert_eq!(decision, "ask");
+        }
+    };
 }
 
-#[test]
-fn e2e_dont_ask_mode_returns_deny() {
-    let (stdout, exit_code) = run_hook(&make_input_with_mode("dontAsk"));
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "deny");
+/// Config test expecting a specific decision (allow/deny/ask).
+macro_rules! config_decision_test {
+    ($name:ident, cmd: $cmd:expr, mode: $mode:expr, config: $cfg:expr, expect: $expected:expr) => {
+        #[test]
+        fn $name() {
+            let (stdout, exit_code) = run_hook_with_config(&bash_input_json($cmd, $mode), $cfg);
+            assert_eq!(exit_code, 0);
+            let (decision, _) = parse_output(&stdout);
+            assert_eq!(decision, $expected);
+        }
+    };
 }
 
-#[test]
-fn e2e_bypass_permissions_mode_returns_allow() {
-    let (stdout, exit_code) = run_hook(&make_input_with_mode("bypassPermissions"));
-    assert_eq!(exit_code, 0);
-    let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "allow");
+/// Config test expecting empty JSON response (no opinion).
+macro_rules! config_empty_test {
+    ($name:ident, cmd: $cmd:expr, mode: $mode:expr, config: $cfg:expr) => {
+        #[test]
+        fn $name() {
+            let (stdout, exit_code) = run_hook_with_config(&bash_input_json($cmd, $mode), $cfg);
+            assert_eq!(exit_code, 0);
+            assert_empty_json(&stdout);
+        }
+    };
 }
 
-// ---- Error case tests ----
+/// Stdin error test: sends raw string, expects "ask" with reason containing substring.
+macro_rules! stdin_error_test {
+    ($name:ident, input: $input:expr, reason_contains: $substr:expr) => {
+        #[test]
+        fn $name() {
+            let (stdout, exit_code) = run_hook($input);
+            assert_eq!(exit_code, 0);
+            let (decision, reason) = parse_output(&stdout);
+            assert_eq!(decision, "ask");
+            assert!(
+                reason.contains($substr),
+                "reason should contain '{}': {reason}",
+                $substr
+            );
+        }
+    };
+}
+
+// ---- No-config: all tools return "ask" regardless of mode ----
+
+no_config_fixture_test!(no_config_bash_default, fixture: "bash-ls.json");
+no_config_fixture_test!(no_config_bash_plan, fixture: "bash-git-status.json");
+no_config_fixture_test!(no_config_read_accept_edits, fixture: "read-file.json");
+no_config_fixture_test!(no_config_write_dont_ask, fixture: "write-file.json");
+no_config_fixture_test!(no_config_edit_bypass, fixture: "edit-file.json");
+no_config_fixture_test!(no_config_glob_default, fixture: "glob-search.json");
+no_config_fixture_test!(no_config_grep_plan, fixture: "grep-search.json");
+
+// ---- With config: non-Bash tools return empty {} ----
 
 #[test]
-fn malformed_json_returns_ask_decision() {
-    let (stdout, exit_code) = run_hook("this is not json at all");
+fn config_non_bash_tool_returns_empty_json() {
+    let input = make_input_json(
+        "Read",
+        "default",
+        serde_json::json!({"file_path": "/tmp/x"}),
+    );
+    let (stdout, exit_code) = run_hook_with_config(&input, r#"bash { allow "git" }"#);
+    assert_eq!(exit_code, 0);
+    assert_empty_json(&stdout);
+}
+
+// ---- With config: single command evaluation ----
+
+config_decision_test!(config_allowed_program,
+    cmd: "git status", mode: "default",
+    config: r#"bash { allow "git" }"#, expect: "allow");
+
+config_decision_test!(config_denied_program,
+    cmd: "rm -rf /", mode: "default",
+    config: r#"bash { deny "rm" }"#, expect: "deny");
+
+config_decision_test!(config_ask_program,
+    cmd: "docker run ubuntu", mode: "default",
+    config: r#"bash { ask "docker" }"#, expect: "ask");
+
+config_empty_test!(config_unlisted_program,
+    cmd: "python script.py", mode: "default",
+    config: r#"bash { allow "git" }"#);
+
+// ---- With config: multi-command aggregation ----
+
+config_decision_test!(config_both_allow,
+    cmd: "git add . && git commit", mode: "default",
+    config: r#"bash { allow "git" }"#, expect: "allow");
+
+config_decision_test!(config_allow_plus_deny,
+    cmd: "git add && rm -rf /", mode: "default",
+    config: r#"bash { allow "git"; deny "rm" }"#, expect: "deny");
+
+config_decision_test!(config_allow_plus_unlisted,
+    cmd: "git status && ls", mode: "default",
+    config: r#"bash { allow "git" }"#, expect: "ask");
+
+config_empty_test!(config_both_unlisted,
+    cmd: "foo && bar", mode: "default",
+    config: r#"bash { allow "git" }"#);
+
+// ---- With config: permission mode modifiers ----
+
+config_decision_test!(config_bypass_ask_becomes_allow,
+    cmd: "docker run", mode: "bypassPermissions",
+    config: r#"bash { ask "docker" }"#, expect: "allow");
+
+config_decision_test!(config_dont_ask_ask_becomes_deny,
+    cmd: "docker run", mode: "dontAsk",
+    config: r#"bash { ask "docker" }"#, expect: "deny");
+
+config_decision_test!(config_bypass_allow_stays_allow,
+    cmd: "git status", mode: "bypassPermissions",
+    config: r#"bash { allow "git" }"#, expect: "allow");
+
+config_decision_test!(config_bypass_deny_stays_deny,
+    cmd: "rm -rf /", mode: "bypassPermissions",
+    config: r#"bash { deny "rm" }"#, expect: "deny");
+
+// ---- Config error handling ----
+
+#[test]
+fn invalid_config_path_returns_ask_with_error() {
+    let input = bash_input_json("git status", "default");
+    let (stdout, exit_code) = run_hook_args(&input, &["--config", "/tmp/nonexistent-12345.kdl"]);
     assert_eq!(exit_code, 0);
     let (decision, reason) = parse_output(&stdout);
     assert_eq!(decision, "ask");
-    assert!(reason.contains("Error"), "reason should contain error info");
+    assert!(
+        reason.contains("Config error"),
+        "reason should mention config error: {reason}"
+    );
 }
 
 #[test]
-fn empty_stdin_returns_ask_decision() {
-    let (stdout, exit_code) = run_hook("");
+fn invalid_config_syntax_returns_ask_with_error() {
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    tmpfile.write_all(b"invalid {{ kdl {{ syntax").unwrap();
+    let config_path = tmpfile.path().to_str().unwrap().to_string();
+    let input = bash_input_json("git status", "default");
+    let (stdout, exit_code) = run_hook_args(&input, &["--config", &config_path]);
     assert_eq!(exit_code, 0);
     let (decision, reason) = parse_output(&stdout);
     assert_eq!(decision, "ask");
-    assert!(reason.contains("Error"), "reason should contain error info");
+    assert!(
+        reason.contains("Config error"),
+        "reason should mention config error: {reason}"
+    );
 }
 
-#[test]
-fn partial_json_returns_ask_decision() {
-    let (stdout, exit_code) = run_hook(r#"{"sessionId": "incomplete"}"#);
-    assert_eq!(exit_code, 0);
-    let (decision, reason) = parse_output(&stdout);
-    assert_eq!(decision, "ask");
-    assert!(reason.contains("Error"), "reason should contain error info");
-}
+// ---- Stdin error cases ----
+
+stdin_error_test!(malformed_json, input: "this is not json at all", reason_contains: "Error");
+stdin_error_test!(empty_stdin, input: "", reason_contains: "Error");
+stdin_error_test!(partial_json, input: r#"{"sessionId": "incomplete"}"#, reason_contains: "Error");
 
 // ---- Output structure validation ----
 
 #[test]
 fn output_always_has_correct_structure() {
-    let input = load_fixture("bash-ls.json");
-    let (stdout, _) = run_hook(&input);
+    let (stdout, _) = run_hook(&load_fixture("bash-ls.json"));
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
 
-    // Verify structure
     assert!(value.get("hookSpecificOutput").is_some());
     let specific = &value["hookSpecificOutput"];
     assert_eq!(specific["hookEventName"], "PreToolUse");
