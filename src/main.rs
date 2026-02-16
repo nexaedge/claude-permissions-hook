@@ -13,6 +13,6 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Hook => claude_permissions_hook::cli::hook::run(),
+        Commands::Hook { config } => claude_permissions_hook::cli::hook::run(config.as_deref()),
     }
 }

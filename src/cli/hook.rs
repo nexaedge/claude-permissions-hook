@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::path::Path;
 
 use crate::decision;
 use crate::protocol::HookOutput;
@@ -7,7 +8,10 @@ use crate::protocol::HookOutput;
 ///
 /// Any error (I/O, parse) results in an `ask` decision with the error as the reason.
 /// This function never panics and always produces valid JSON on stdout.
-pub fn run() {
+///
+/// The `_config_path` parameter is accepted but not yet wired into decision logic
+/// (that happens in Step 03: Decision Matrix).
+pub fn run(_config_path: Option<&Path>) {
     let output = match execute_from_stdin() {
         Ok(output) => output,
         Err(e) => HookOutput::ask(format!("Error: {e}")),
