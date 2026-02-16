@@ -391,7 +391,7 @@ $RECYCLE.BIN/
 
 
 # Compiled binaries in npm platform packages (placed by CI only)
-npm/*/bin/claude-permissions-hook
+npm/claude-permissions-hook-*/bin/claude-permissions-hook
 
 # Added by cargo
 

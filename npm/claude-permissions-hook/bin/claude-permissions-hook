@@ -1,0 +1,43 @@
+#!/usr/bin/env node
+
+const { execFileSync } = require("child_process");
+const path = require("path");
+const os = require("os");
+
+const PLATFORMS = {
+  "darwin-arm64": "claude-permissions-hook-darwin-arm64",
+  "darwin-x64": "claude-permissions-hook-darwin-x64",
+  "linux-x64": "claude-permissions-hook-linux-x64",
+  "linux-arm64": "claude-permissions-hook-linux-arm64",
+};
+
+const platformKey = `${os.platform()}-${os.arch()}`;
+const pkg = PLATFORMS[platformKey];
+
+if (!pkg) {
+  console.error(
+    `claude-permissions-hook: unsupported platform ${platformKey}`
+  );
+  process.exit(1);
+}
+
+let binPath;
+try {
+  binPath = path.join(
+    path.dirname(require.resolve(`${pkg}/package.json`)),
+    "bin",
+    "claude-permissions-hook"
+  );
+} catch {
+  console.error(
+    `claude-permissions-hook: platform package ${pkg} not found. ` +
+      `Try reinstalling: npm install claude-permissions-hook`
+  );
+  process.exit(1);
+}
+
+const result = require("child_process").spawnSync(binPath, process.argv.slice(2), {
+  stdio: "inherit",
+});
+
+process.exit(result.status ?? 1);
