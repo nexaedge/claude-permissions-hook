@@ -64,8 +64,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Upgrade npm for trusted publishing (OIDC)
+        run: npm install -g npm@latest
 
       - name: Download all binaries
         uses: actions/download-artifact@v4
@@ -115,8 +118,6 @@ jobs:
           cd ../..
 
       - name: Publish platform packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for pkg in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
             cd "npm/claude-permissions-hook-${pkg}"
@@ -125,8 +126,6 @@ jobs:
           done
 
       - name: Publish base package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd npm/claude-permissions-hook
           npm publish --provenance --access public
