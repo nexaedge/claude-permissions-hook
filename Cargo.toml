@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Permission hook for Claude Code with granular rule-based control"
 license = "MIT"
-repository = "https://github.com/jaisonerick/claude-permissions-hook"
+repository = "https://github.com/nexaedge/claude-permissions-hook"
 readme = "README.md"
 
 [dependencies]

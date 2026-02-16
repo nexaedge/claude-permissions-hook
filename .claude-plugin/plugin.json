@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Granular permission control for Claude Code tools",
   "author": { "name": "Jaison Erick" },
-  "repository": "https://github.com/jaisonerick/claude-permissions-hook",
+  "repository": "https://github.com/nexaedge/claude-permissions-hook",
   "license": "MIT",
   "hooks": "./hooks/hooks.json"
 }

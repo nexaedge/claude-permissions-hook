@@ -12,7 +12,7 @@ Thank you for considering contributing! This guide will help you get started.
 ### Getting Started
 
 ```bash
-git clone https://github.com/jaisonerick/claude-permissions-hook.git
+git clone https://github.com/nexaedge/claude-permissions-hook.git
 cd claude-permissions-hook
 cargo build
 ```
