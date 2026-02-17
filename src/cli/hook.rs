@@ -10,7 +10,9 @@ use crate::protocol::HookOutput;
 /// Loads config from the optional `--config` path. Without config, all tools
 /// receive an "ask" decision prompting the user to configure the hook.
 ///
-/// This function never panics and always produces valid JSON on stdout.
+/// All runtime errors (bad stdin, config errors, parse failures) produce valid
+/// JSON on stdout. Panics only on invariant violations (e.g., broken Serialize
+/// derive), which indicate programming bugs rather than runtime conditions.
 pub fn run(config_path: Option<&Path>) {
     let config = config_path.map(Config::load);
 
@@ -42,11 +44,12 @@ fn execute_from_stdin(
 
 /// Serialize a HookOutput to JSON and print to stdout.
 ///
-/// Serialization of HookOutput (strings + enums) cannot realistically fail,
-/// but we handle it to uphold the no-panic contract.
+/// # Panics
+///
+/// Panics if serialization fails, which cannot happen with the derived
+/// `Serialize` impl on strings and enums. This is an invariant, not a
+/// runtime error — failure here indicates a programming bug.
 fn output_json(output: &HookOutput) {
-    let json = serde_json::to_string(output).unwrap_or_else(|_| {
-        r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Internal serialization error"}}"#.to_string()
-    });
+    let json = serde_json::to_string(output).expect("HookOutput serialization cannot fail");
     println!("{json}");
 }

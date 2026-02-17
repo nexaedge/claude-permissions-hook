@@ -11,7 +11,6 @@ readme = "README.md"
 brush-parser = "0.3.0"
 clap = { version = "4", features = ["derive"] }
 kdl = "6"
-miette = { version = "7", features = ["fancy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

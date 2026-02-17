@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::protocol::Decision;
@@ -8,12 +9,12 @@ pub struct Config {
     pub bash: BashConfig,
 }
 
-/// Bash-specific configuration: lists of programs to allow, deny, or ask about.
+/// Bash-specific configuration: sets of programs to allow, deny, or ask about.
 #[derive(Debug, Default)]
 pub struct BashConfig {
-    pub allow: Vec<String>,
-    pub deny: Vec<String>,
-    pub ask: Vec<String>,
+    pub allow: HashSet<String>,
+    pub deny: HashSet<String>,
+    pub ask: HashSet<String>,
 }
 
 /// Errors that can occur when loading or parsing a config file.
@@ -25,8 +26,6 @@ pub enum ConfigError {
     ReadError(#[from] std::io::Error),
     #[error("invalid KDL syntax: {0}")]
     ParseError(String),
-    #[error("invalid config: {0}")]
-    ValidationError(String),
 }
 
 impl Config {
@@ -72,11 +71,11 @@ impl BashConfig {
     ///
     /// Precedence: deny > ask > allow. Returns `None` for unlisted programs.
     pub fn lookup(&self, program: &str) -> Option<Decision> {
-        if self.deny.iter().any(|p| p == program) {
+        if self.deny.contains(program) {
             Some(Decision::Deny)
-        } else if self.ask.iter().any(|p| p == program) {
+        } else if self.ask.contains(program) {
             Some(Decision::Ask)
-        } else if self.allow.iter().any(|p| p == program) {
+        } else if self.allow.contains(program) {
             Some(Decision::Allow)
         } else {
             None
@@ -85,8 +84,8 @@ impl BashConfig {
 }
 
 /// Collect all string arguments from nodes with the given name.
-/// Handles multiple nodes: `allow "git"` + `allow "cargo"` merges into one list.
-fn collect_programs(doc: &kdl::KdlDocument, node_name: &str) -> Vec<String> {
+/// Handles multiple nodes: `allow "git"` + `allow "cargo"` merges into one set.
+fn collect_programs(doc: &kdl::KdlDocument, node_name: &str) -> HashSet<String> {
     doc.nodes()
         .iter()
         .filter(|n| n.name().value() == node_name)
@@ -103,6 +102,10 @@ mod tests {
 
     // --- KDL Parsing Tests ---
 
+    fn set_of(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn parse_valid_kdl_with_all_sections() {
         let config = Config::parse(
@@ -116,9 +119,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.bash.allow, vec!["git", "cargo", "npm"]);
-        assert_eq!(config.bash.deny, vec!["rm", "shutdown"]);
-        assert_eq!(config.bash.ask, vec!["docker", "kubectl"]);
+        assert_eq!(config.bash.allow, set_of(&["git", "cargo", "npm"]));
+        assert_eq!(config.bash.deny, set_of(&["rm", "shutdown"]));
+        assert_eq!(config.bash.ask, set_of(&["docker", "kubectl"]));
     }
 
     #[test]
@@ -132,7 +135,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.bash.allow, vec!["git"]);
+        assert_eq!(config.bash.allow, set_of(&["git"]));
         assert!(config.bash.deny.is_empty());
         assert!(config.bash.ask.is_empty());
     }
@@ -158,7 +161,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.bash.allow, vec!["git", "cargo", "npm"]);
+        assert_eq!(config.bash.allow, set_of(&["git", "cargo", "npm"]));
     }
 
     #[test]
@@ -173,9 +176,9 @@ mod tests {
     #[test]
     fn lookup_program_in_allow_list() {
         let bash = BashConfig {
-            allow: vec!["git".into()],
-            deny: vec![],
-            ask: vec![],
+            allow: set_of(&["git"]),
+            deny: HashSet::new(),
+            ask: HashSet::new(),
         };
         assert_eq!(bash.lookup("git"), Some(Decision::Allow));
     }
@@ -183,9 +186,9 @@ mod tests {
     #[test]
     fn lookup_program_in_deny_list() {
         let bash = BashConfig {
-            allow: vec![],
-            deny: vec!["rm".into()],
-            ask: vec![],
+            allow: HashSet::new(),
+            deny: set_of(&["rm"]),
+            ask: HashSet::new(),
         };
         assert_eq!(bash.lookup("rm"), Some(Decision::Deny));
     }
@@ -193,9 +196,9 @@ mod tests {
     #[test]
     fn lookup_program_in_ask_list() {
         let bash = BashConfig {
-            allow: vec![],
-            deny: vec![],
-            ask: vec!["docker".into()],
+            allow: HashSet::new(),
+            deny: HashSet::new(),
+            ask: set_of(&["docker"]),
         };
         assert_eq!(bash.lookup("docker"), Some(Decision::Ask));
     }
@@ -203,9 +206,9 @@ mod tests {
     #[test]
     fn lookup_unlisted_program_returns_none() {
         let bash = BashConfig {
-            allow: vec!["git".into()],
-            deny: vec!["rm".into()],
-            ask: vec!["docker".into()],
+            allow: set_of(&["git"]),
+            deny: set_of(&["rm"]),
+            ask: set_of(&["docker"]),
         };
         assert_eq!(bash.lookup("python"), None);
     }
@@ -213,9 +216,9 @@ mod tests {
     #[test]
     fn lookup_program_in_both_allow_and_deny_returns_deny() {
         let bash = BashConfig {
-            allow: vec!["rm".into()],
-            deny: vec!["rm".into()],
-            ask: vec![],
+            allow: set_of(&["rm"]),
+            deny: set_of(&["rm"]),
+            ask: HashSet::new(),
         };
         assert_eq!(bash.lookup("rm"), Some(Decision::Deny));
     }
@@ -223,9 +226,9 @@ mod tests {
     #[test]
     fn lookup_program_in_both_allow_and_ask_returns_ask() {
         let bash = BashConfig {
-            allow: vec!["docker".into()],
-            deny: vec![],
-            ask: vec!["docker".into()],
+            allow: set_of(&["docker"]),
+            deny: HashSet::new(),
+            ask: set_of(&["docker"]),
         };
         assert_eq!(bash.lookup("docker"), Some(Decision::Ask));
     }
@@ -252,8 +255,8 @@ mod tests {
         .unwrap();
 
         let config = Config::load(tmpfile.path()).unwrap();
-        assert_eq!(config.bash.allow, vec!["git", "cargo"]);
-        assert_eq!(config.bash.deny, vec!["rm"]);
+        assert_eq!(config.bash.allow, set_of(&["git", "cargo"]));
+        assert_eq!(config.bash.deny, set_of(&["rm"]));
     }
 
     #[test]

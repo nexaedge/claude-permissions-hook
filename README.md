@@ -22,22 +22,52 @@ The hook runs automatically as a Claude Code PreToolUse hook. It reads tool call
 
 ```bash
 # Test the hook manually
-echo '{"tool_name":"Bash","tool_input":{"command":"ls"},"permission_mode":"default"}' | claude-permissions-hook hook
+echo '{"sessionId":"s","transcriptPath":"/tmp/t","cwd":"/tmp","permissionMode":"default","hookEventName":"PreToolUse","toolName":"Bash","toolInput":{"command":"git status"},"toolUseId":"t"}' | claude-permissions-hook hook --config my-config.kdl
 ```
 
 ### Permission Modes
 
-The hook respects Claude Code's permission modes:
+The hook respects Claude Code's permission modes. `allow` and `deny` from config are absolute. `ask` is modulated by mode:
 
-| Mode | Behavior |
-|------|----------|
-| `bypassPermissions` | Allow all tool calls |
-| `dontAsk` | Deny all tool calls |
-| `default`, `plan`, `acceptEdits` | Ask for confirmation |
+| Config Decision | `bypassPermissions` | `dontAsk` | `default` / `plan` / `acceptEdits` |
+|---|---|---|---|
+| allow | allow | allow | allow |
+| deny | deny | deny | deny |
+| ask | allow | deny | ask |
+| unlisted | — | — | — |
+
+Unlisted programs (not in any config list) return no opinion — Claude handles them natively.
 
 ## Configuration
 
-Configuration support with YAML-based rules is planned for a future release. Currently, the hook provides basic permission mode handling.
+Pass a KDL config file via `--config`:
+
+```bash
+claude-permissions-hook hook --config ~/.config/claude-permissions.kdl
+```
+
+### Config Format (KDL)
+
+```kdl
+bash {
+    allow "git" "cargo" "npm" "node" "ls" "cat" "echo"
+    deny "rm" "shutdown" "reboot"
+    ask "docker" "kubectl" "curl"
+}
+```
+
+- **allow** — auto-approve these programs
+- **deny** — always block these programs
+- **ask** — prompt for confirmation (modulated by permission mode)
+- **unlisted** — programs not in any list get no opinion from the hook
+
+Lookup precedence: deny > ask > allow.
+
+### Multi-Command Handling
+
+For chained commands (`&&`, `||`, `;`, `|`), the hook evaluates each program and takes the most restrictive decision. If any program is denied, the whole command is denied.
+
+Without `--config`, the hook returns `ask` for everything, prompting you to set up a config file.
 
 ## Development
 

@@ -6,30 +6,34 @@ pub struct CommandSegment {
     pub program: String,
 }
 
+/// Error returned when a command string cannot be parsed.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct ParseError(pub String);
+
 /// Parse a shell command string into individual command segments.
 ///
 /// Uses brush-parser to build a proper shell AST, then walks it to extract
 /// program names. Correctly handles quoting, escaping, subshells, and
 /// compound commands.
 ///
-/// On parse errors, returns an empty Vec (fail-safe).
-pub fn parse(command: &str) -> Vec<CommandSegment> {
+/// Returns `Err` on parse failures so the caller can fail closed.
+pub fn parse(command: &str) -> Result<Vec<CommandSegment>, ParseError> {
     if command.trim().is_empty() {
-        return vec![];
+        return Ok(vec![]);
     }
 
     let mut parser = brush_parser::Parser::builder()
         .reader(std::io::Cursor::new(command.to_string()))
         .build();
 
-    let program = match parser.parse_program() {
-        Ok(program) => program,
-        Err(_) => return vec![],
-    };
+    let program = parser
+        .parse_program()
+        .map_err(|e| ParseError(e.to_string()))?;
 
     let mut segments = Vec::new();
     visit_program(&program, &mut segments);
-    segments
+    Ok(segments)
 }
 
 fn visit_program(program: &ast::Program, segments: &mut Vec<CommandSegment>) {
@@ -70,7 +74,8 @@ fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
             }
         }
         ast::Command::Compound(compound, _) => visit_compound(compound, segments),
-        ast::Command::Function(_) | ast::Command::ExtendedTest(_) => {}
+        ast::Command::Function(func) => visit_compound(&func.body.0, segments),
+        ast::Command::ExtendedTest(_) => {} // [[ ]] doesn't execute programs
     }
 }
 
@@ -98,7 +103,14 @@ fn visit_compound(command: &ast::CompoundCommand, segments: &mut Vec<CommandSegm
                 }
             }
         }
-        ast::CompoundCommand::CaseClause(_) | ast::CompoundCommand::Arithmetic(_) => {}
+        ast::CompoundCommand::CaseClause(cmd) => {
+            for case_item in &cmd.cases {
+                if let Some(body) = &case_item.cmd {
+                    visit_compound_list(body, segments);
+                }
+            }
+        }
+        ast::CompoundCommand::Arithmetic(_) => {} // (( )) doesn't execute programs
     }
 }
 
@@ -113,7 +125,11 @@ mod tests {
     use super::*;
 
     fn programs(input: &str) -> Vec<String> {
-        parse(input).into_iter().map(|s| s.program).collect()
+        parse(input)
+            .expect("parse should succeed")
+            .into_iter()
+            .map(|s| s.program)
+            .collect()
     }
 
     #[test]
@@ -163,8 +179,8 @@ mod tests {
 
     #[test]
     fn trailing_operator_is_invalid_syntax() {
-        // Trailing && is invalid shell — parser returns error, fail-safe returns empty
-        assert_eq!(programs("git add . &&"), Vec::<String>::new());
+        // Trailing && is invalid shell — parser returns error
+        assert!(parse("git add . &&").is_err());
     }
 
     #[test]
@@ -188,5 +204,18 @@ mod tests {
     #[test]
     fn subshell_commands_extracted() {
         assert_eq!(programs("(git status && echo done)"), vec!["git", "echo"]);
+    }
+
+    #[test]
+    fn function_body_programs_extracted() {
+        assert_eq!(programs("f(){ rm -rf /; }; f"), vec!["rm", "f"]);
+    }
+
+    #[test]
+    fn case_clause_body_programs_extracted() {
+        assert_eq!(
+            programs("case $x in a) rm -rf /;; b) echo ok;; esac"),
+            vec!["rm", "echo"]
+        );
     }
 }

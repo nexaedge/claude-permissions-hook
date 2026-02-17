@@ -180,7 +180,7 @@ fn config_non_bash_tool_returns_empty_json() {
     assert_empty_json(&stdout);
 }
 
-// ---- With config: single command evaluation ----
+// ---- With config: representative decision types (logic tested in unit tests) ----
 
 config_decision_test!(config_allowed_program,
     cmd: "git status", mode: "default",
@@ -198,41 +198,19 @@ config_empty_test!(config_unlisted_program,
     cmd: "python script.py", mode: "default",
     config: r#"bash { allow "git" }"#);
 
-// ---- With config: multi-command aggregation ----
+// ---- With config: fail-closed on unparseable commands ----
 
-config_decision_test!(config_both_allow,
-    cmd: "git add . && git commit", mode: "default",
-    config: r#"bash { allow "git" }"#, expect: "allow");
-
-config_decision_test!(config_allow_plus_deny,
-    cmd: "git add && rm -rf /", mode: "default",
-    config: r#"bash { allow "git"; deny "rm" }"#, expect: "deny");
-
-config_decision_test!(config_allow_plus_unlisted,
-    cmd: "git status && ls", mode: "default",
+config_decision_test!(config_parse_error_returns_ask,
+    cmd: "git add . &&", mode: "default",
     config: r#"bash { allow "git" }"#, expect: "ask");
 
-config_empty_test!(config_both_unlisted,
-    cmd: "foo && bar", mode: "default",
-    config: r#"bash { allow "git" }"#);
+config_decision_test!(config_empty_command_returns_ask,
+    cmd: "", mode: "default",
+    config: r#"bash { allow "git" }"#, expect: "ask");
 
-// ---- With config: permission mode modifiers ----
-
-config_decision_test!(config_bypass_ask_becomes_allow,
-    cmd: "docker run", mode: "bypassPermissions",
-    config: r#"bash { ask "docker" }"#, expect: "allow");
-
-config_decision_test!(config_dont_ask_ask_becomes_deny,
-    cmd: "docker run", mode: "dontAsk",
-    config: r#"bash { ask "docker" }"#, expect: "deny");
-
-config_decision_test!(config_bypass_allow_stays_allow,
-    cmd: "git status", mode: "bypassPermissions",
-    config: r#"bash { allow "git" }"#, expect: "allow");
-
-config_decision_test!(config_bypass_deny_stays_deny,
-    cmd: "rm -rf /", mode: "bypassPermissions",
-    config: r#"bash { deny "rm" }"#, expect: "deny");
+config_decision_test!(config_arithmetic_only_returns_ask,
+    cmd: "(( x + 1 ))", mode: "default",
+    config: r#"bash { allow "git" }"#, expect: "ask");
 
 // ---- Config error handling ----
 
