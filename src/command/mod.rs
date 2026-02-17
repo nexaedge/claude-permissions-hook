@@ -4,6 +4,7 @@ use brush_parser::ast;
 #[derive(Debug, PartialEq)]
 pub struct CommandSegment {
     pub program: String,
+    pub args: Vec<String>,
 }
 
 /// Error returned when a command string cannot be parsed.
@@ -34,6 +35,24 @@ pub fn parse(command: &str) -> Result<Vec<CommandSegment>, ParseError> {
     let mut segments = Vec::new();
     visit_program(&program, &mut segments);
     Ok(segments)
+}
+
+/// Expand combined short flags into individual flags.
+///
+/// `-rf` → `["-r", "-f"]`. Long flags (`--force`), single short flags (`-v`),
+/// positionals, bare `-`, `--`, and flags with `=` are returned unchanged.
+pub fn expand_flags(arg: &str) -> Vec<String> {
+    if !arg.starts_with('-') || arg == "-" || arg == "--" || arg.starts_with("--") || arg.contains('=')
+    {
+        return vec![arg.to_string()];
+    }
+    // Single short flag: -v (exactly 2 chars)
+    let chars: Vec<char> = arg[1..].chars().collect();
+    if chars.len() == 1 {
+        return vec![arg.to_string()];
+    }
+    // Combined short flags: -rf → ["-r", "-f"]
+    chars.iter().map(|c| format!("-{c}")).collect()
 }
 
 fn visit_program(program: &ast::Program, segments: &mut Vec<CommandSegment>) {
@@ -93,7 +112,10 @@ fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
                     }
 
                     // Not a wrapper (or wrapper with no arguments) — emit as-is
-                    segments.push(CommandSegment { program: name });
+                    segments.push(CommandSegment {
+                        program: name,
+                        args: vec![],
+                    });
                 }
             }
         }
@@ -131,7 +153,10 @@ fn extract_wrapped_programs(
                     continue;
                 }
                 // Found the actual target program
-                result.push(CommandSegment { program: prog });
+                result.push(CommandSegment {
+                    program: prog,
+                    args: vec![],
+                });
                 break;
             }
             NextProgram::FromSplitString(segments) => {
@@ -510,5 +535,47 @@ mod tests {
     #[test]
     fn env_split_string_with_other_options() {
         assert_eq!(programs(r#"env -i -u PATH -S "rm -rf /""#), vec!["rm"]);
+    }
+
+    // --- Flag expansion ---
+
+    #[test]
+    fn expand_flags_combined_short_flags() {
+        assert_eq!(expand_flags("-rf"), vec!["-r", "-f"]);
+    }
+
+    #[test]
+    fn expand_flags_long_flag_unchanged() {
+        assert_eq!(expand_flags("--force"), vec!["--force"]);
+    }
+
+    #[test]
+    fn expand_flags_single_short_flag_unchanged() {
+        assert_eq!(expand_flags("-v"), vec!["-v"]);
+    }
+
+    #[test]
+    fn expand_flags_positional_unchanged() {
+        assert_eq!(expand_flags("filename"), vec!["filename"]);
+    }
+
+    #[test]
+    fn expand_flags_bare_dash_unchanged() {
+        assert_eq!(expand_flags("-"), vec!["-"]);
+    }
+
+    #[test]
+    fn expand_flags_double_dash_unchanged() {
+        assert_eq!(expand_flags("--"), vec!["--"]);
+    }
+
+    #[test]
+    fn expand_flags_with_equals_unchanged() {
+        assert_eq!(expand_flags("-rf=value"), vec!["-rf=value"]);
+    }
+
+    #[test]
+    fn expand_flags_three_chars() {
+        assert_eq!(expand_flags("-rvf"), vec!["-r", "-v", "-f"]);
     }
 }
