@@ -10,7 +10,7 @@ use super::ConfigError;
 ///
 /// Each tool (bash, write, etc.) implements this to define its section
 /// name and how to build config from the intermediate representation.
-pub(crate) trait ToolConfig: Default + std::fmt::Debug {
+pub(crate) trait ToolConfig: Default + std::fmt::Debug + 'static {
     /// KDL section name (e.g., `"bash"`, `"write"`).
     const SECTION: &'static str;
 
@@ -21,7 +21,7 @@ pub(crate) trait ToolConfig: Default + std::fmt::Debug {
 /// Intermediate representation of a tool's configuration section.
 ///
 /// Contains tiered rule entries (allow/deny/ask) with no KDL dependency.
-pub(super) struct ToolSection {
+pub(crate) struct ToolSection {
     pub allow: Vec<RuleEntry>,
     pub deny: Vec<RuleEntry>,
     pub ask: Vec<RuleEntry>,
@@ -31,7 +31,7 @@ pub(super) struct ToolSection {
 ///
 /// Represents one `allow "..."`, `deny "..."`, or `ask "..."` node with
 /// its string values and optional children block.
-pub(super) struct RuleEntry {
+pub(crate) struct RuleEntry {
     /// String values (e.g., `["git", "cargo"]` from `allow "git" "cargo"`).
     pub values: Vec<String>,
     /// Parsed children block, if present.
@@ -43,7 +43,7 @@ pub(super) struct RuleEntry {
 /// A child node within a rule's children block.
 ///
 /// Represents nodes like `required-flags "r" "f"` or `positionals "/*"`.
-pub(super) struct ChildNode {
+pub(crate) struct ChildNode {
     /// Node name (e.g., `"required-flags"`, `"positionals"`).
     pub name: String,
     /// String values from the node.

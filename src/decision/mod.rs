@@ -1,5 +1,5 @@
 use crate::command;
-use crate::config::Config;
+use crate::config::{BashConfig, Config};
 use crate::protocol::output::Decision;
 use crate::protocol::{HookInput, HookOutput, PermissionMode};
 
@@ -51,9 +51,10 @@ pub fn evaluate(input: &HookInput, config: Option<&Config>) -> Option<HookOutput
         ));
     }
 
-    // Look up each command segment
+    // Look up each command segment against bash config
+    let bash = config.tool::<BashConfig>()?;
     let per_program: Vec<Option<Decision>> =
-        segments.iter().map(|seg| config.bash.lookup(seg)).collect();
+        segments.iter().map(|seg| bash.lookup(seg)).collect();
 
     // Aggregate decisions
     let aggregated = aggregate_decisions(&per_program);

@@ -1,18 +1,24 @@
-mod bash;
+pub(crate) mod bash;
 mod kdl;
 pub mod rule;
-mod section;
+pub(crate) mod section;
 
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use bash::BashConfig;
 
 use kdl::KdlParse;
+use section::ToolConfig;
 
-/// Top-level configuration loaded from a KDL file.
-#[derive(Debug)]
+type ToolParser = Box<dyn Fn(&KdlParse) -> Result<(TypeId, Box<dyn Any>), ConfigError>>;
+
+/// Top-level configuration holding registered tool configs.
+///
+/// Built via [`ConfigBuilder`]. Access individual tool configs with [`tool`](Self::tool).
 pub struct Config {
-    pub bash: BashConfig,
+    tools: HashMap<TypeId, Box<dyn Any>>,
 }
 
 /// Errors that can occur when loading or parsing a config file.
@@ -27,8 +33,74 @@ pub enum ConfigError {
 }
 
 impl Config {
-    /// Load a config from a KDL file at the given path.
-    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+    /// Create a new builder for registering tool parsers.
+    pub fn builder() -> ConfigBuilder {
+        ConfigBuilder {
+            parsers: Vec::new(),
+            prebuilt: HashMap::new(),
+        }
+    }
+
+    /// Get a registered tool's config by type.
+    ///
+    /// Returns `None` if the tool was not registered or its section was absent.
+    pub(crate) fn tool<T: ToolConfig>(&self) -> Option<&T> {
+        self.tools
+            .get(&TypeId::of::<T>())
+            .and_then(|b| b.downcast_ref())
+    }
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("registered_tools", &self.tools.len())
+            .finish()
+    }
+}
+
+/// Builder for constructing a [`Config`] with registered tool parsers.
+///
+/// Two modes of construction:
+/// - **Parsing**: `register::<T>()` then `parse()`/`load()` — parses tool sections from KDL
+/// - **Direct**: `set(tool_config)` then `build()` — inserts pre-built configs (useful for tests)
+pub struct ConfigBuilder {
+    parsers: Vec<ToolParser>,
+    prebuilt: HashMap<TypeId, Box<dyn Any>>,
+}
+
+impl ConfigBuilder {
+    /// Register a tool to be parsed from its KDL section during `parse()`/`load()`.
+    pub(crate) fn register<T: ToolConfig>(mut self) -> Self {
+        self.parsers.push(Box::new(|kdl| {
+            let config: T = section::parse_tool(kdl)?;
+            Ok((TypeId::of::<T>(), Box::new(config)))
+        }));
+        self
+    }
+
+    /// Insert a pre-built tool config directly (skips KDL parsing for this tool).
+    #[cfg(test)]
+    pub(crate) fn set<T: ToolConfig>(mut self, config: T) -> Self {
+        self.prebuilt.insert(TypeId::of::<T>(), Box::new(config));
+        self
+    }
+
+    /// Parse a KDL string, running all registered parsers.
+    pub fn parse(self, content: &str) -> Result<Config, ConfigError> {
+        let (doc, source) = KdlParse::parse(content)?;
+        let kdl = KdlParse::new(&doc, source);
+
+        let mut tools = self.prebuilt;
+        for parser in &self.parsers {
+            let (type_id, config) = parser(&kdl)?;
+            tools.insert(type_id, config);
+        }
+        Ok(Config { tools })
+    }
+
+    /// Load and parse a KDL file, running all registered parsers.
+    pub fn load(self, path: &Path) -> Result<Config, ConfigError> {
         let content = std::fs::read_to_string(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 ConfigError::NotFound(path.to_path_buf())
@@ -36,20 +108,15 @@ impl Config {
                 ConfigError::ReadError(e)
             }
         })?;
-        Self::parse(&content)
+        self.parse(&content)
     }
 
-    /// Parse a KDL string into a Config.
-    pub fn parse(content: &str) -> Result<Self, ConfigError> {
-        let (doc, source) = KdlParse::parse(content)?;
-        let kdl = KdlParse::new(&doc, source);
-        Self::from_document(&kdl)
-    }
-
-    fn from_document(kdl: &KdlParse) -> Result<Self, ConfigError> {
-        Ok(Config {
-            bash: section::parse_tool(kdl)?,
-        })
+    /// Build a Config from pre-built tools only (no KDL parsing).
+    #[cfg(test)]
+    pub(crate) fn build(self) -> Config {
+        Config {
+            tools: self.prebuilt,
+        }
     }
 }
 
@@ -68,7 +135,6 @@ mod tests {
         items.iter().map(|s| s.to_string()).collect()
     }
 
-    /// Create simple unconditional rules from program names.
     fn rules_of(programs: &[&str]) -> Vec<rule::BashRule> {
         programs
             .iter()
@@ -90,9 +156,17 @@ mod tests {
         rules.iter().map(|r| r.program.as_str()).collect()
     }
 
+    /// Parse KDL with bash tool registered.
+    fn parse_config(content: &str) -> Result<Config, ConfigError> {
+        Config::builder().register::<BashConfig>().parse(content)
+    }
+
+    /// Shorthand to get BashConfig from a Config.
+    fn bash(config: &Config) -> &BashConfig {
+        config.tool::<BashConfig>().expect("bash not registered")
+    }
+
     /// Parse raw KDL and collect bash rules for a single tier.
-    ///
-    /// Routes through section (KDL -> intermediate) then bash (intermediate -> rules).
     fn rules_from_kdl(source: &str, tier: &str) -> Vec<rule::BashRule> {
         let ts = section::parse_from_source(source).unwrap();
         let entries = match tier {
@@ -104,7 +178,7 @@ mod tests {
         bash::parse_rules(entries).unwrap()
     }
 
-    /// Parse raw KDL, attempt to collect bash rules, and return the error string.
+    /// Parse raw KDL, attempt to collect bash rules, return the error string.
     fn rules_err(source: &str, tier: &str) -> String {
         let ts = match section::parse_from_source(source) {
             Err(e) => return e.to_string(),
@@ -123,7 +197,7 @@ mod tests {
 
     #[test]
     fn parse_valid_kdl_with_all_sections() {
-        let config = Config::parse(
+        let config = parse_config(
             r#"
             bash {
                 allow "git" "cargo" "npm"
@@ -134,20 +208,21 @@ mod tests {
         )
         .unwrap();
 
-        let mut allow_names: Vec<&str> = program_names(&config.bash.allow);
+        let b = bash(&config);
+        let mut allow_names: Vec<&str> = program_names(&b.allow);
         allow_names.sort();
         assert_eq!(allow_names, vec!["cargo", "git", "npm"]);
-        let mut deny_names: Vec<&str> = program_names(&config.bash.deny);
+        let mut deny_names: Vec<&str> = program_names(&b.deny);
         deny_names.sort();
         assert_eq!(deny_names, vec!["rm", "shutdown"]);
-        let mut ask_names: Vec<&str> = program_names(&config.bash.ask);
+        let mut ask_names: Vec<&str> = program_names(&b.ask);
         ask_names.sort();
         assert_eq!(ask_names, vec!["docker", "kubectl"]);
     }
 
     #[test]
     fn parse_kdl_with_missing_sections() {
-        let config = Config::parse(
+        let config = parse_config(
             r#"
             bash {
                 allow "git"
@@ -156,22 +231,24 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(program_names(&config.bash.allow), vec!["git"]);
-        assert!(config.bash.deny.is_empty());
-        assert!(config.bash.ask.is_empty());
+        let b = bash(&config);
+        assert_eq!(program_names(&b.allow), vec!["git"]);
+        assert!(b.deny.is_empty());
+        assert!(b.ask.is_empty());
     }
 
     #[test]
     fn parse_empty_kdl_file() {
-        let config = Config::parse("").unwrap();
-        assert!(config.bash.allow.is_empty());
-        assert!(config.bash.deny.is_empty());
-        assert!(config.bash.ask.is_empty());
+        let config = parse_config("").unwrap();
+        let b = bash(&config);
+        assert!(b.allow.is_empty());
+        assert!(b.deny.is_empty());
+        assert!(b.ask.is_empty());
     }
 
     #[test]
     fn merge_multiple_allow_nodes() {
-        let config = Config::parse(
+        let config = parse_config(
             r#"
             bash {
                 allow "git"
@@ -181,85 +258,111 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            program_names(&config.bash.allow),
+            program_names(&bash(&config).allow),
             vec!["git", "cargo", "npm"]
         );
     }
 
     #[test]
     fn invalid_kdl_returns_parse_error() {
-        let result = Config::parse("this is { not valid { kdl");
+        let result = parse_config("this is { not valid { kdl");
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ConfigError::ParseError(_)));
+    }
+
+    #[test]
+    fn unregistered_tool_returns_none() {
+        let config = Config::builder().build();
+        assert!(config.tool::<BashConfig>().is_none());
     }
 
     // --- Lookup tests ---
 
     #[test]
     fn lookup_program_in_allow_list() {
-        let bash = BashConfig {
-            allow: rules_of(&["git"]),
-            deny: vec![],
-            ask: vec![],
-        };
-        assert_eq!(bash.lookup(&seg("git")), Some(Decision::Allow));
+        let config = Config::builder()
+            .set(BashConfig {
+                allow: rules_of(&["git"]),
+                ..Default::default()
+            })
+            .build();
+        assert_eq!(
+            bash(&config).lookup(&seg("git")),
+            Some(Decision::Allow)
+        );
     }
 
     #[test]
     fn lookup_program_in_deny_list() {
-        let bash = BashConfig {
-            allow: vec![],
-            deny: rules_of(&["rm"]),
-            ask: vec![],
-        };
-        assert_eq!(bash.lookup(&seg("rm")), Some(Decision::Deny));
+        let config = Config::builder()
+            .set(BashConfig {
+                deny: rules_of(&["rm"]),
+                ..Default::default()
+            })
+            .build();
+        assert_eq!(bash(&config).lookup(&seg("rm")), Some(Decision::Deny));
     }
 
     #[test]
     fn lookup_program_in_ask_list() {
-        let bash = BashConfig {
-            allow: vec![],
-            deny: vec![],
-            ask: rules_of(&["docker"]),
-        };
-        assert_eq!(bash.lookup(&seg("docker")), Some(Decision::Ask));
+        let config = Config::builder()
+            .set(BashConfig {
+                ask: rules_of(&["docker"]),
+                ..Default::default()
+            })
+            .build();
+        assert_eq!(
+            bash(&config).lookup(&seg("docker")),
+            Some(Decision::Ask)
+        );
     }
 
     #[test]
     fn lookup_unlisted_program_returns_none() {
-        let bash = BashConfig {
-            allow: rules_of(&["git"]),
-            deny: rules_of(&["rm"]),
-            ask: rules_of(&["docker"]),
-        };
-        assert_eq!(bash.lookup(&seg("python")), None);
+        let config = Config::builder()
+            .set(BashConfig {
+                allow: rules_of(&["git"]),
+                deny: rules_of(&["rm"]),
+                ask: rules_of(&["docker"]),
+            })
+            .build();
+        assert_eq!(bash(&config).lookup(&seg("python")), None);
     }
 
     #[test]
     fn lookup_program_in_both_allow_and_deny_returns_deny() {
-        let bash = BashConfig {
-            allow: rules_of(&["rm"]),
-            deny: rules_of(&["rm"]),
-            ask: vec![],
-        };
-        assert_eq!(bash.lookup(&seg("rm")), Some(Decision::Deny));
+        let config = Config::builder()
+            .set(BashConfig {
+                allow: rules_of(&["rm"]),
+                deny: rules_of(&["rm"]),
+                ..Default::default()
+            })
+            .build();
+        assert_eq!(bash(&config).lookup(&seg("rm")), Some(Decision::Deny));
     }
 
     #[test]
     fn lookup_program_in_both_allow_and_ask_returns_ask() {
-        let bash = BashConfig {
-            allow: rules_of(&["docker"]),
-            deny: vec![],
-            ask: rules_of(&["docker"]),
-        };
-        assert_eq!(bash.lookup(&seg("docker")), Some(Decision::Ask));
+        let config = Config::builder()
+            .set(BashConfig {
+                allow: rules_of(&["docker"]),
+                ask: rules_of(&["docker"]),
+                ..Default::default()
+            })
+            .build();
+        assert_eq!(
+            bash(&config).lookup(&seg("docker")),
+            Some(Decision::Ask)
+        );
     }
 
     // --- File loading tests ---
 
     #[test]
     fn load_nonexistent_file_returns_not_found() {
-        let result = Config::load(Path::new("/tmp/does-not-exist-12345.kdl"));
+        let result = Config::builder()
+            .register::<BashConfig>()
+            .load(Path::new("/tmp/does-not-exist-12345.kdl"));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ConfigError::NotFound(_)));
     }
@@ -276,9 +379,13 @@ mod tests {
         )
         .unwrap();
 
-        let config = Config::load(tmpfile.path()).unwrap();
-        assert_eq!(program_names(&config.bash.allow), vec!["git", "cargo"]);
-        assert_eq!(program_names(&config.bash.deny), vec!["rm"]);
+        let config = Config::builder()
+            .register::<BashConfig>()
+            .load(tmpfile.path())
+            .unwrap();
+        let b = bash(&config);
+        assert_eq!(program_names(&b.allow), vec!["git", "cargo"]);
+        assert_eq!(program_names(&b.deny), vec!["rm"]);
     }
 
     #[test]
@@ -286,7 +393,9 @@ mod tests {
         let mut tmpfile = NamedTempFile::new().unwrap();
         writeln!(tmpfile, "invalid {{ kdl {{ syntax").unwrap();
 
-        let result = Config::load(tmpfile.path());
+        let result = Config::builder()
+            .register::<BashConfig>()
+            .load(tmpfile.path());
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ConfigError::ParseError(_)));
     }
@@ -295,23 +404,29 @@ mod tests {
 
     #[test]
     fn lookup_absolute_path_matches_basename() {
-        let bash = BashConfig {
-            allow: vec![],
-            deny: rules_of(&["rm"]),
-            ask: vec![],
-        };
-        assert_eq!(bash.lookup(&seg("/bin/rm")), Some(Decision::Deny));
-        assert_eq!(bash.lookup(&seg("/usr/bin/rm")), Some(Decision::Deny));
+        let config = Config::builder()
+            .set(BashConfig {
+                deny: rules_of(&["rm"]),
+                ..Default::default()
+            })
+            .build();
+        let b = bash(&config);
+        assert_eq!(b.lookup(&seg("/bin/rm")), Some(Decision::Deny));
+        assert_eq!(b.lookup(&seg("/usr/bin/rm")), Some(Decision::Deny));
     }
 
     #[test]
     fn lookup_relative_path_matches_basename() {
-        let bash = BashConfig {
-            allow: rules_of(&["deploy"]),
-            deny: vec![],
-            ask: vec![],
-        };
-        assert_eq!(bash.lookup(&seg("./scripts/deploy")), Some(Decision::Allow));
+        let config = Config::builder()
+            .set(BashConfig {
+                allow: rules_of(&["deploy"]),
+                ..Default::default()
+            })
+            .build();
+        assert_eq!(
+            bash(&config).lookup(&seg("./scripts/deploy")),
+            Some(Decision::Allow)
+        );
     }
 
     // --- Inline rule parsing tests ---
@@ -583,7 +698,7 @@ mod tests {
 
     #[test]
     fn error_propagates_through_config_parse() {
-        let result = Config::parse(
+        let result = parse_config(
             r#"
             bash {
                 deny "git &&"
@@ -596,7 +711,7 @@ mod tests {
 
     #[test]
     fn error_invalid_glob_propagates_through_config_parse() {
-        let result = Config::parse(
+        let result = parse_config(
             r#"
             bash {
                 deny "rm" {
