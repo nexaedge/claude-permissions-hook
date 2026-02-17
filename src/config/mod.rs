@@ -113,15 +113,15 @@ fn collect_rules(
         // Reject children block without any string entry (fail-closed)
         if has_children && string_entries.is_empty() {
             return Err(ConfigError::ParseError(format!(
-                "{node_name} node has children block but no program entry"
+                "{node_name} node has a children block but no program entry: {node}"
             )));
         }
 
         // Reject multiple entries combined with children (ambiguous semantics)
         if has_children && string_entries.len() > 1 {
             return Err(ConfigError::ParseError(format!(
-                "{node_name} node has children block with multiple entries; \
-                 use separate nodes instead"
+                "{node_name} node has a children block with multiple entries \
+                 (use separate nodes instead): {node}"
             )));
         }
 
@@ -765,6 +765,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("no program entry"), "got: {err}");
+        assert!(err.contains("required-flags"), "should include node text, got: {err}");
     }
 
     #[test]
@@ -779,6 +780,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("multiple entries"), "got: {err}");
+        assert!(err.contains(r#""rm""#), "should include node text, got: {err}");
     }
 
     #[test]
