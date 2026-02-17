@@ -1,9 +1,12 @@
+mod kdl;
 pub mod rule;
 
 use std::path::{Path, PathBuf};
 
 use crate::command::CommandSegment;
 use crate::protocol::Decision;
+
+use kdl::KdlParse;
 
 /// Top-level configuration loaded from a KDL file.
 #[derive(Debug)]
@@ -30,107 +33,6 @@ pub enum ConfigError {
     ParseError(String),
 }
 
-// ---------------------------------------------------------------------------
-// KDL abstraction layer
-//
-// KdlParse / ParseNode wrap the kdl crate types so that the rest of this
-// module never touches KDL iterators, entries, or spans directly.
-// ---------------------------------------------------------------------------
-
-/// Parsed KDL document paired with its source text.
-///
-/// Provides section lookup and node iteration that return [`ParseNode`]
-/// wrappers carrying source context for line-number error reporting.
-struct KdlParse<'a> {
-    doc: &'a kdl::KdlDocument,
-    source: &'a str,
-}
-
-/// Single KDL node with source context for line-number reporting.
-struct ParseNode<'a> {
-    node: &'a kdl::KdlNode,
-    source: &'a str,
-}
-
-impl<'a> KdlParse<'a> {
-    /// Get a named top-level section's children as a new `KdlParse`.
-    ///
-    /// `section("bash")` returns the contents of the `bash { … }` block.
-    fn section(&self, name: &str) -> Option<KdlParse<'a>> {
-        self.doc
-            .get(name)
-            .and_then(|n| n.children())
-            .map(|doc| KdlParse {
-                doc,
-                source: self.source,
-            })
-    }
-
-    /// Iterate over child nodes whose name matches `name`.
-    fn nodes_named(&self, name: &str) -> Vec<ParseNode<'a>> {
-        self.doc
-            .nodes()
-            .iter()
-            .filter(|n| n.name().value() == name)
-            .map(|node| ParseNode {
-                node,
-                source: self.source,
-            })
-            .collect()
-    }
-
-    /// Iterate over all child nodes.
-    fn nodes(&self) -> Vec<ParseNode<'a>> {
-        self.doc
-            .nodes()
-            .iter()
-            .map(|node| ParseNode {
-                node,
-                source: self.source,
-            })
-            .collect()
-    }
-}
-
-impl<'a> ParseNode<'a> {
-    /// The node's identifier (e.g. `"deny"`, `"required-flags"`).
-    fn name(&self) -> &str {
-        self.node.name().value()
-    }
-
-    /// Collect all string-valued entries from this node.
-    fn string_values(&self) -> Vec<&'a str> {
-        self.node
-            .entries()
-            .iter()
-            .filter_map(|e| e.value().as_string())
-            .collect()
-    }
-
-    /// Whether this node has a children block `{ … }`.
-    fn has_children(&self) -> bool {
-        self.node.children().is_some()
-    }
-
-    /// Get the children block as a new `KdlParse` (preserving source).
-    fn children(&self) -> Option<KdlParse<'a>> {
-        self.node.children().map(|doc| KdlParse {
-            doc,
-            source: self.source,
-        })
-    }
-
-    /// 1-based line number of this node in the original source.
-    fn line(&self) -> usize {
-        let offset = self.node.span().offset();
-        self.source[..offset.min(self.source.len())]
-            .bytes()
-            .filter(|&b| b == b'\n')
-            .count()
-            + 1
-    }
-}
-
 impl Config {
     /// Load a config from a KDL file at the given path.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
@@ -146,13 +48,8 @@ impl Config {
 
     /// Parse a KDL string into a Config.
     pub fn parse(content: &str) -> Result<Self, ConfigError> {
-        let doc: kdl::KdlDocument = content
-            .parse()
-            .map_err(|e: kdl::KdlError| ConfigError::ParseError(e.to_string()))?;
-        let kdl = KdlParse {
-            doc: &doc,
-            source: content,
-        };
+        let (doc, source) = KdlParse::parse(content)?;
+        let kdl = KdlParse::new(&doc, source);
         Self::from_document(&kdl)
     }
 
@@ -621,15 +518,15 @@ mod tests {
 
     /// Helper to parse KDL and collect rules from a specific node name.
     fn rules_from_kdl(source: &str, node_name: &str) -> Vec<rule::BashRule> {
-        let doc: kdl::KdlDocument = source.parse().unwrap();
-        let kdl = KdlParse { doc: &doc, source };
+        let (doc, src) = KdlParse::parse(source).unwrap();
+        let kdl = KdlParse::new(&doc, src);
         collect_rules(&kdl, node_name).unwrap()
     }
 
     /// Helper to parse KDL, collect rules, and return the error.
     fn rules_err(source: &str, node_name: &str) -> String {
-        let doc: kdl::KdlDocument = source.parse().unwrap();
-        let kdl = KdlParse { doc: &doc, source };
+        let (doc, src) = KdlParse::parse(source).unwrap();
+        let kdl = KdlParse::new(&doc, src);
         collect_rules(&kdl, node_name).unwrap_err().to_string()
     }
 
