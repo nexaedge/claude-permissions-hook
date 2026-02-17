@@ -42,7 +42,11 @@ pub fn parse(command: &str) -> Result<Vec<CommandSegment>, ParseError> {
 /// `-rf` → `["-r", "-f"]`. Long flags (`--force`), single short flags (`-v`),
 /// positionals, bare `-`, `--`, and flags with `=` are returned unchanged.
 pub fn expand_flags(arg: &str) -> Vec<String> {
-    if !arg.starts_with('-') || arg == "-" || arg == "--" || arg.starts_with("--") || arg.contains('=')
+    if !arg.starts_with('-')
+        || arg == "-"
+        || arg == "--"
+        || arg.starts_with("--")
+        || arg.contains('=')
     {
         return vec![arg.to_string()];
     }
@@ -130,16 +134,27 @@ fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
 ///
 /// Iterates suffix items, skips I/O redirections, assignment words, and process
 /// substitutions. For each `Word` item, flattens it to a string and applies
-/// `expand_flags()` to normalize combined short flags.
+/// `expand_flags()` to normalize combined short flags. After encountering `--`,
+/// all subsequent tokens are treated as positionals (no expansion).
 fn extract_args_from_suffix(suffix: &Option<ast::CommandSuffix>) -> Vec<String> {
     let Some(suffix) = suffix else {
         return vec![];
     };
     let mut args = Vec::new();
+    let mut end_of_options = false;
     for item in &suffix.0 {
         if let ast::CommandPrefixOrSuffixItem::Word(word) = item {
             let text = word.flatten();
-            args.extend(expand_flags(&text));
+            if text == "--" {
+                end_of_options = true;
+                args.push(text);
+                continue;
+            }
+            if end_of_options {
+                args.push(text);
+            } else {
+                args.extend(expand_flags(&text));
+            }
         }
         // IoRedirect, AssignmentWord, ProcessSubstitution — skip
     }
@@ -175,7 +190,10 @@ fn extract_wrapped_programs(
                 }
                 // Found the actual target program — collect remaining items as args
                 let args = collect_remaining_args(&mut items);
-                result.push(CommandSegment { program: prog, args });
+                result.push(CommandSegment {
+                    program: prog,
+                    args,
+                });
                 break;
             }
             NextProgram::FromSplitString(segments) => {
@@ -194,14 +212,25 @@ fn extract_wrapped_programs(
 ///
 /// Used after the target program has been identified in wrapper unwrapping.
 /// Skips IoRedirect, AssignmentWord, and ProcessSubstitution items.
+/// After encountering `--`, all subsequent tokens are treated as positionals.
 fn collect_remaining_args<'a>(
     items: &mut impl Iterator<Item = &'a ast::CommandPrefixOrSuffixItem>,
 ) -> Vec<String> {
     let mut args = Vec::new();
+    let mut end_of_options = false;
     for item in items {
         if let ast::CommandPrefixOrSuffixItem::Word(word) = item {
             let text = word.flatten();
-            args.extend(expand_flags(&text));
+            if text == "--" {
+                end_of_options = true;
+                args.push(text);
+                continue;
+            }
+            if end_of_options {
+                args.push(text);
+            } else {
+                args.extend(expand_flags(&text));
+            }
         }
     }
     args
@@ -624,6 +653,13 @@ mod tests {
         assert_eq!(segs[0].args, vec!["log"]);
     }
 
+    #[test]
+    fn args_double_dash_stops_flag_expansion() {
+        let segs = parse_segments("rm -- -rf /tmp");
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["--", "-rf", "/tmp"]);
+    }
+
     // --- Wrapper arg forwarding ---
 
     #[test]
@@ -648,6 +684,13 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].program, "git");
         assert_eq!(segs[0].args, vec!["push", "--force"]);
+    }
+
+    #[test]
+    fn wrapper_double_dash_stops_flag_expansion() {
+        let segs = parse_segments("command rm -- -rf /tmp");
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["--", "-rf", "/tmp"]);
     }
 
     // --- Flag expansion ---
