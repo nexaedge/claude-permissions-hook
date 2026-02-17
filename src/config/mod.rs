@@ -679,4 +679,44 @@ mod tests {
         let result = collect_rules(&doc, "deny");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn rule_double_dash_goes_to_required_flags() {
+        // "git --" is valid shell — `--` starts with `-` so it classifies as a flag.
+        // Unusual rule but consistent behavior.
+        let rules = rules_from_kdl(r#"deny "git --""#, "deny");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].program, "git");
+        assert_eq!(rules[0].conditions.required_flags, set_of(&["--"]));
+        assert!(rules[0].conditions.subcommand.is_empty());
+    }
+
+    #[test]
+    fn error_propagates_through_config_parse() {
+        // Invalid inline rule should cause Config::parse to fail
+        let result = Config::parse(
+            r#"
+            bash {
+                deny "git &&"
+            }
+            "#,
+        );
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ConfigError::ParseError(_)));
+    }
+
+    #[test]
+    fn error_invalid_glob_propagates_through_config_parse() {
+        let result = Config::parse(
+            r#"
+            bash {
+                deny "rm" {
+                    positionals "[invalid"
+                }
+            }
+            "#,
+        );
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ConfigError::ParseError(_)));
+    }
 }
