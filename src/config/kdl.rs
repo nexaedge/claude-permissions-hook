@@ -7,9 +7,9 @@
 ///
 /// Provides section lookup and node iteration that return [`ParseNode`]
 /// wrappers carrying source context for line-number error reporting.
-pub(super) struct KdlParse<'a> {
-    doc: &'a kdl::KdlDocument,
-    source: &'a str,
+pub(super) struct KdlParse {
+    doc: kdl::KdlDocument,
+    source: String,
 }
 
 /// Single KDL node with source context for line-number reporting.
@@ -18,35 +18,43 @@ pub(super) struct ParseNode<'a> {
     source: &'a str,
 }
 
-impl<'a> KdlParse<'a> {
-    /// Create a new `KdlParse` from a document and its original source text.
-    pub(super) fn new(doc: &'a kdl::KdlDocument, source: &'a str) -> Self {
-        Self { doc, source }
-    }
-
-    /// Parse a KDL source string into a document and wrap it.
+impl KdlParse {
+    /// Parse a KDL source string into an owned document.
     ///
     /// Returns a `ConfigError::ParseError` on invalid syntax.
-    pub(super) fn parse(source: &str) -> Result<(kdl::KdlDocument, &str), super::ConfigError> {
+    pub(super) fn parse(source: &str) -> Result<Self, super::ConfigError> {
         let doc: kdl::KdlDocument = source
             .parse()
             .map_err(|e: kdl::KdlError| super::ConfigError::ParseError(e.to_string()))?;
-        Ok((doc, source))
+        Ok(Self {
+            doc,
+            source: source.to_string(),
+        })
     }
 
-    /// Get a named top-level section's children as a new `KdlParse`.
+    /// Get a named top-level section's children as a borrowed `KdlSection`.
     ///
     /// `section("bash")` returns the contents of the `bash { … }` block.
-    pub(super) fn section(&self, name: &str) -> Option<KdlParse<'a>> {
+    pub(super) fn section(&self, name: &str) -> Option<KdlSection<'_>> {
         self.doc
             .get(name)
             .and_then(|n| n.children())
-            .map(|doc| KdlParse {
+            .map(|doc| KdlSection {
                 doc,
-                source: self.source,
+                source: &self.source,
             })
     }
+}
 
+/// Borrowed view into a KDL section (children block of a top-level node).
+///
+/// Provides node iteration for parsing tool sections.
+pub(super) struct KdlSection<'a> {
+    doc: &'a kdl::KdlDocument,
+    source: &'a str,
+}
+
+impl<'a> KdlSection<'a> {
     /// Iterate over child nodes whose name matches `name`.
     pub(super) fn nodes_named(&self, name: &str) -> Vec<ParseNode<'a>> {
         self.doc
@@ -93,9 +101,9 @@ impl<'a> ParseNode<'a> {
         self.node.children().is_some()
     }
 
-    /// Get the children block as a new `KdlParse` (preserving source).
-    pub(super) fn children(&self) -> Option<KdlParse<'a>> {
-        self.node.children().map(|doc| KdlParse {
+    /// Get the children block as a borrowed `KdlSection` (preserving source).
+    pub(super) fn children(&self) -> Option<KdlSection<'a>> {
+        self.node.children().map(|doc| KdlSection {
             doc,
             source: self.source,
         })

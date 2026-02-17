@@ -3,7 +3,7 @@
 //! Converts KDL sections into tool-agnostic intermediate types.
 //! Tool modules consume these without any KDL dependency.
 
-use super::kdl::KdlParse;
+use super::kdl::{KdlParse, KdlSection};
 use super::ConfigError;
 
 /// Trait for tool-specific configuration.
@@ -67,7 +67,7 @@ pub(super) fn parse_tool<T: ToolConfig>(kdl: &KdlParse) -> Result<T, ConfigError
     }
 }
 
-fn parse_section(kdl: &KdlParse) -> Result<ToolSection, ConfigError> {
+fn parse_section(kdl: &KdlSection) -> Result<ToolSection, ConfigError> {
     Ok(ToolSection {
         allow: collect_entries(kdl, "allow")?,
         deny: collect_entries(kdl, "deny")?,
@@ -80,7 +80,7 @@ fn parse_section(kdl: &KdlParse) -> Result<ToolSection, ConfigError> {
 /// Validates structural constraints common to all tools:
 /// - Children block requires exactly one string entry
 /// - Children block without any entry is rejected
-fn collect_entries(kdl: &KdlParse, tier: &str) -> Result<Vec<RuleEntry>, ConfigError> {
+fn collect_entries(kdl: &KdlSection, tier: &str) -> Result<Vec<RuleEntry>, ConfigError> {
     let mut entries = Vec::new();
     for node in kdl.nodes_named(tier) {
         let line = node.line();
@@ -122,9 +122,13 @@ fn collect_entries(kdl: &KdlParse, tier: &str) -> Result<Vec<RuleEntry>, ConfigE
 }
 
 /// Test-only: parse raw KDL source directly into a ToolSection.
+///
+/// Wraps the source in a synthetic `test { … }` section so that
+/// `parse_section` can operate on the children block.
 #[cfg(test)]
 pub(super) fn parse_from_source(source: &str) -> Result<ToolSection, ConfigError> {
-    let (doc, src) = super::kdl::KdlParse::parse(source)?;
-    let kdl = super::kdl::KdlParse::new(&doc, src);
-    parse_section(&kdl)
+    let wrapped = format!("test {{\n{source}\n}}");
+    let kdl = super::kdl::KdlParse::parse(&wrapped)?;
+    let section = kdl.section("test").expect("synthetic test section must exist");
+    parse_section(&section)
 }

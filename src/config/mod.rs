@@ -88,8 +88,7 @@ impl ConfigBuilder {
 
     /// Parse a KDL string, running all registered parsers.
     pub fn parse(self, content: &str) -> Result<Config, ConfigError> {
-        let (doc, source) = KdlParse::parse(content)?;
-        let kdl = KdlParse::new(&doc, source);
+        let kdl = KdlParse::parse(content)?;
 
         let mut tools = self.prebuilt;
         for parser in &self.parsers {
@@ -614,7 +613,7 @@ mod tests {
     fn rule_invalid_inline_rule_returns_error() {
         let err = rules_err(r#"deny "git &&""#, "deny");
         assert!(
-            err.contains("line 1"),
+            err.contains("line 2"),
             "should include line number, got: {err}"
         );
     }
@@ -628,7 +627,7 @@ mod tests {
             "deny",
         );
         assert!(
-            err.contains("line 2"),
+            err.contains("line 3"),
             "should include line number, got: {err}"
         );
     }
@@ -642,7 +641,7 @@ mod tests {
             "deny",
         );
         assert!(
-            err.contains("line 2"),
+            err.contains("line 3"),
             "should include line number, got: {err}"
         );
     }
@@ -652,7 +651,7 @@ mod tests {
         let err = rules_err(r#"deny "git status && rm -rf /""#, "deny");
         assert!(err.contains("multiple commands"), "got: {err}");
         assert!(
-            err.contains("line 1"),
+            err.contains("line 2"),
             "should include line number, got: {err}"
         );
     }
@@ -667,7 +666,7 @@ mod tests {
         );
         assert!(err.contains("no program entry"), "got: {err}");
         assert!(
-            err.contains("line 1"),
+            err.contains("line 2"),
             "should include line number, got: {err}"
         );
     }
@@ -682,7 +681,7 @@ mod tests {
         );
         assert!(err.contains("multiple entries"), "got: {err}");
         assert!(
-            err.contains("line 1"),
+            err.contains("line 2"),
             "should include line number, got: {err}"
         );
     }
@@ -693,7 +692,7 @@ mod tests {
             "allow \"git\"\nallow \"cargo\"\ndeny {\n    required-flags \"r\"\n}",
             "deny",
         );
-        assert!(err.contains("line 3"), "should report line 3, got: {err}");
+        assert!(err.contains("line 4"), "should report line 4, got: {err}");
     }
 
     #[test]
