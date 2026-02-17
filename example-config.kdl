@@ -1,0 +1,28 @@
+// Example configuration for claude-permissions-hook
+//
+// Place this file anywhere and pass it via --config:
+//   claude-permissions-hook hook --config /path/to/config.kdl
+//
+// Decision precedence: deny > ask > allow
+// Programs not listed in any category get no opinion (Claude handles natively).
+
+bash {
+    // Safe read-only and dev commands — auto-approve
+    allow "git" "cargo" "npm" "node" "npx" "pnpm" "bun" "yarn"
+    allow "ls" "cat" "echo" "head" "tail" "wc" "sort" "uniq" "diff"
+    allow "grep" "rg" "find" "fd" "tree" "file" "which" "pwd"
+    allow "rustc" "rustup" "python" "ruby" "go" "java" "javac"
+    allow "make" "cmake" "just"
+
+    // Destructive or system-level commands — always block
+    deny "rm" "rmdir" "shutdown" "reboot" "halt" "poweroff"
+    deny "mkfs" "fdisk" "dd" "format"
+    deny "userdel" "groupdel" "passwd"
+
+    // Potentially risky — prompt for confirmation
+    ask "docker" "kubectl" "terraform" "pulumi"
+    ask "curl" "wget" "ssh" "scp" "rsync"
+    ask "brew" "apt" "apt-get" "yum" "dnf" "pacman"
+    ask "pip" "gem" "composer"
+    ask "chmod" "chown" "chgrp" "sudo"
+}
