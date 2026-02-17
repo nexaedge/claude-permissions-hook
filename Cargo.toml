@@ -1,6 +1,6 @@
 [package]
 name = "claude-permissions-hook"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Permission hook for Claude Code with granular rule-based control"
 license = "MIT"
