@@ -36,13 +36,18 @@ fn run_hook_args(stdin_input: &str, extra_args: &[&str]) -> (String, i32) {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            use std::io::Write;
-            child
+            use std::io::{ErrorKind, Write};
+            let write_result = child
                 .stdin
                 .take()
                 .unwrap()
-                .write_all(stdin_input.as_bytes())
-                .unwrap();
+                .write_all(stdin_input.as_bytes());
+            // Ignore BrokenPipe: child may exit before reading stdin (e.g. config errors)
+            if let Err(e) = write_result {
+                if e.kind() != ErrorKind::BrokenPipe {
+                    return Err(e);
+                }
+            }
             child.wait_with_output()
         })
         .expect("failed to execute binary");
