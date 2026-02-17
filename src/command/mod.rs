@@ -173,11 +173,9 @@ fn extract_wrapped_programs(
                     current_wrapper = basename.to_string();
                     continue;
                 }
-                // Found the actual target program
-                result.push(CommandSegment {
-                    program: prog,
-                    args: vec![],
-                });
+                // Found the actual target program — collect remaining items as args
+                let args = collect_remaining_args(&mut items);
+                result.push(CommandSegment { program: prog, args });
                 break;
             }
             NextProgram::FromSplitString(segments) => {
@@ -190,6 +188,23 @@ fn extract_wrapped_programs(
     }
 
     result
+}
+
+/// Collect remaining suffix items as args, applying flag expansion.
+///
+/// Used after the target program has been identified in wrapper unwrapping.
+/// Skips IoRedirect, AssignmentWord, and ProcessSubstitution items.
+fn collect_remaining_args<'a>(
+    items: &mut impl Iterator<Item = &'a ast::CommandPrefixOrSuffixItem>,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    for item in items {
+        if let ast::CommandPrefixOrSuffixItem::Word(word) = item {
+            let text = word.flatten();
+            args.extend(expand_flags(&text));
+        }
+    }
+    args
 }
 
 /// Known short/long options that consume a following separate argument for each wrapper.
@@ -607,6 +622,32 @@ mod tests {
         let segs = parse_segments("git log > file");
         assert_eq!(segs[0].program, "git");
         assert_eq!(segs[0].args, vec!["log"]);
+    }
+
+    // --- Wrapper arg forwarding ---
+
+    #[test]
+    fn wrapper_command_forwards_args() {
+        let segs = parse_segments("command rm -rf /");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    #[test]
+    fn wrapper_env_forwards_args() {
+        let segs = parse_segments("env rm -rf /");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    #[test]
+    fn wrapper_nohup_forwards_args() {
+        let segs = parse_segments("nohup git push --force");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "git");
+        assert_eq!(segs[0].args, vec!["push", "--force"]);
     }
 
     // --- Flag expansion ---
