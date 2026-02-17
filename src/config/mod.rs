@@ -101,6 +101,161 @@ fn collect_programs(doc: &kdl::KdlDocument, node_name: &str) -> HashSet<String> 
         .collect()
 }
 
+/// Collect all rules from nodes with the given name.
+///
+/// Handles both simple program entries (`deny "rm"`) and inline argument rules
+/// (`deny "rm -rf /"`), plus optional children blocks for extended conditions.
+fn collect_rules(
+    doc: &kdl::KdlDocument,
+    node_name: &str,
+) -> Result<Vec<rule::BashRule>, ConfigError> {
+    let mut rules = Vec::new();
+    for node in doc.nodes().iter().filter(|n| n.name().value() == node_name) {
+        for entry in node.entries() {
+            if let Some(value) = entry.value().as_string() {
+                let bash_rule = parse_rule_entry(value)?;
+                rules.push(bash_rule);
+            }
+        }
+        // If the node has children, they extend the LAST rule from the inline entries.
+        // e.g., `deny "rm -rf" { optional-flags "g" }` extends the "rm -rf" rule.
+        if let Some(children) = node.children() {
+            if let Some(last_rule) = rules.last_mut() {
+                parse_children_block(children, &mut last_rule.conditions)?;
+            }
+        }
+    }
+    Ok(rules)
+}
+
+/// Parse a single rule entry string into a BashRule.
+///
+/// Simple program name (no spaces) → BashRule with empty conditions.
+/// Rule with args → parse with command::parse(), classify args into conditions.
+fn parse_rule_entry(value: &str) -> Result<rule::BashRule, ConfigError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::ParseError(
+            "empty rule string".to_string(),
+        ));
+    }
+
+    // Simple program name: no spaces → empty conditions
+    if !trimmed.contains(' ') {
+        return Ok(rule::BashRule {
+            program: trimmed.to_string(),
+            conditions: rule::RuleConditions::default(),
+        });
+    }
+
+    // Parse with command::parse() to get program + args
+    let segments = crate::command::parse(trimmed)
+        .map_err(|e| ConfigError::ParseError(format!("invalid rule '{trimmed}': {e}")))?;
+
+    let segment = segments.into_iter().next().ok_or_else(|| {
+        ConfigError::ParseError(format!("no program found in rule '{trimmed}'"))
+    })?;
+
+    let mut conditions = rule::RuleConditions::default();
+    for arg in &segment.args {
+        if arg.starts_with('-') {
+            conditions.required_flags.insert(arg.clone());
+        } else {
+            conditions.subcommand.push(arg.clone());
+        }
+    }
+
+    Ok(rule::BashRule {
+        program: segment.program,
+        conditions,
+    })
+}
+
+/// Parse a children block to extend rule conditions.
+///
+/// Supported children nodes:
+/// - `required-flags "r" "f"` → normalize and add to required_flags
+/// - `optional-flags "r" "f"` → normalize and set optional_flags
+/// - `positionals "/*" "/home/*"` → compile as globs
+/// - `required-arguments "--upload-file *"` → split to ArgumentPattern
+/// - `subcommands "status" "push origin"` → split to subcommand chains
+/// - Any other name → named positional matcher (add to positionals)
+fn parse_children_block(
+    children: &kdl::KdlDocument,
+    conditions: &mut rule::RuleConditions,
+) -> Result<(), ConfigError> {
+    for node in children.nodes() {
+        let name = node.name().value();
+        let values: Vec<String> = node
+            .entries()
+            .iter()
+            .filter_map(|e| e.value().as_string().map(String::from))
+            .collect();
+
+        match name {
+            "required-flags" => {
+                for v in &values {
+                    conditions
+                        .required_flags
+                        .insert(rule::normalize_flag(v));
+                }
+            }
+            "optional-flags" => {
+                for v in &values {
+                    conditions
+                        .optional_flags
+                        .insert(rule::normalize_flag(v));
+                }
+            }
+            "positionals" => {
+                for v in &values {
+                    let pattern = rule::compile_glob(v)
+                        .map_err(|e| ConfigError::ParseError(e))?;
+                    conditions.positionals.push(pattern);
+                }
+            }
+            "required-arguments" => {
+                for v in &values {
+                    let pattern = parse_argument_pattern(v)?;
+                    conditions.required_arguments.push(pattern);
+                }
+            }
+            "subcommands" => {
+                for v in &values {
+                    let chain: Vec<String> =
+                        v.split_whitespace().map(String::from).collect();
+                    conditions.subcommands.push(chain);
+                }
+            }
+            _ => {
+                // Named positional matcher (e.g., `files "/*"`, `remotes "linear"`)
+                for v in &values {
+                    let pattern = rule::compile_glob(v)
+                        .map_err(|e| ConfigError::ParseError(e))?;
+                    conditions.positionals.push(pattern);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Parse a `required-arguments` entry: `"--upload-file *"` → ArgumentPattern.
+fn parse_argument_pattern(value: &str) -> Result<rule::ArgumentPattern, ConfigError> {
+    let parts: Vec<&str> = value.splitn(2, ' ').collect();
+    if parts.len() != 2 {
+        return Err(ConfigError::ParseError(format!(
+            "required-arguments entry must have flag and value pattern: '{value}'"
+        )));
+    }
+    let flag = parts[0].to_string();
+    let pattern = rule::compile_glob(parts[1]).map_err(|e| ConfigError::ParseError(e))?;
+    Ok(rule::ArgumentPattern {
+        flag,
+        value: pattern,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +452,232 @@ mod tests {
         let result = Config::load(tmpfile.path());
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ConfigError::ParseError(_)));
+    }
+
+    // --- collect_rules: inline rule parsing ---
+
+    /// Helper to parse KDL and collect rules from a specific node name.
+    fn rules_from_kdl(kdl: &str, node_name: &str) -> Vec<rule::BashRule> {
+        let doc: kdl::KdlDocument = kdl.parse().unwrap();
+        collect_rules(&doc, node_name).unwrap()
+    }
+
+    #[test]
+    fn rule_simple_program_name() {
+        let rules = rules_from_kdl(r#"deny "rm""#, "deny");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].program, "rm");
+        assert!(rules[0].is_unconditional());
+    }
+
+    #[test]
+    fn rule_multiple_programs_on_one_node() {
+        let rules = rules_from_kdl(r#"allow "git" "cargo""#, "allow");
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].program, "git");
+        assert!(rules[0].is_unconditional());
+        assert_eq!(rules[1].program, "cargo");
+        assert!(rules[1].is_unconditional());
+    }
+
+    #[test]
+    fn rule_inline_with_flags_and_positional() {
+        // deny "rm -rf /" → program="rm", required_flags={"-r","-f"}, subcommand=["/"]
+        let rules = rules_from_kdl(r#"deny "rm -rf /""#, "deny");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].program, "rm");
+        assert_eq!(
+            rules[0].conditions.required_flags,
+            set_of(&["-r", "-f"])
+        );
+        assert_eq!(rules[0].conditions.subcommand, vec!["/"]);
+    }
+
+    #[test]
+    fn rule_inline_flags_only() {
+        // deny "rm -rf" → program="rm", required_flags={"-r","-f"}, NO subcommand
+        let rules = rules_from_kdl(r#"deny "rm -rf""#, "deny");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].program, "rm");
+        assert_eq!(
+            rules[0].conditions.required_flags,
+            set_of(&["-r", "-f"])
+        );
+        assert!(rules[0].conditions.subcommand.is_empty());
+    }
+
+    #[test]
+    fn rule_inline_with_subcommand_and_flag() {
+        // deny "git push --force" → program="git", required_flags={"--force"}, subcommand=["push"]
+        let rules = rules_from_kdl(r#"deny "git push --force""#, "deny");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].program, "git");
+        assert_eq!(
+            rules[0].conditions.required_flags,
+            set_of(&["--force"])
+        );
+        assert_eq!(rules[0].conditions.subcommand, vec!["push"]);
+    }
+
+    // --- collect_rules: children block parsing ---
+
+    #[test]
+    fn rule_children_required_flags() {
+        let rules = rules_from_kdl(
+            r#"deny "rm" {
+                required-flags "r" "f"
+            }"#,
+            "deny",
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].program, "rm");
+        assert_eq!(
+            rules[0].conditions.required_flags,
+            set_of(&["-r", "-f"])
+        );
+    }
+
+    #[test]
+    fn rule_children_optional_flags() {
+        let rules = rules_from_kdl(
+            r#"deny "rm" {
+                optional-flags "force"
+            }"#,
+            "deny",
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].conditions.optional_flags,
+            set_of(&["--force"])
+        );
+    }
+
+    #[test]
+    fn rule_children_required_arguments() {
+        let rules = rules_from_kdl(
+            r#"ask "curl" {
+                required-arguments "--upload-file *"
+            }"#,
+            "ask",
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].conditions.required_arguments.len(), 1);
+        assert_eq!(
+            rules[0].conditions.required_arguments[0].flag,
+            "--upload-file"
+        );
+        assert_eq!(rules[0].conditions.required_arguments[0].value.raw, "*");
+    }
+
+    #[test]
+    fn rule_children_subcommands() {
+        let rules = rules_from_kdl(
+            r#"allow "git" {
+                subcommands "status" "push origin"
+            }"#,
+            "allow",
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].conditions.subcommands.len(), 2);
+        assert_eq!(rules[0].conditions.subcommands[0], vec!["status"]);
+        assert_eq!(
+            rules[0].conditions.subcommands[1],
+            vec!["push", "origin"]
+        );
+    }
+
+    #[test]
+    fn rule_children_named_positional_matcher() {
+        // Named matcher `files "/*"` → same as positionals "/*"
+        let rules = rules_from_kdl(
+            r#"deny "rm" {
+                files "/*"
+            }"#,
+            "deny",
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].conditions.positionals.len(), 1);
+        assert_eq!(rules[0].conditions.positionals[0].raw, "/*");
+    }
+
+    #[test]
+    fn rule_inline_with_children_extends_conditions() {
+        // allow "claude mcp add" { remotes "linear" }
+        // → subcommand=["mcp","add"] + positionals=["linear"]
+        let rules = rules_from_kdl(
+            r#"allow "claude mcp add" {
+                remotes "linear"
+            }"#,
+            "allow",
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].program, "claude");
+        assert_eq!(
+            rules[0].conditions.subcommand,
+            vec!["mcp", "add"]
+        );
+        assert_eq!(rules[0].conditions.positionals.len(), 1);
+        assert_eq!(rules[0].conditions.positionals[0].raw, "linear");
+    }
+
+    #[test]
+    fn rule_children_positionals_glob() {
+        let rules = rules_from_kdl(
+            r#"deny "rm" {
+                positionals "/*" "/home/*"
+            }"#,
+            "deny",
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].conditions.positionals.len(), 2);
+        assert_eq!(rules[0].conditions.positionals[0].raw, "/*");
+        assert_eq!(rules[0].conditions.positionals[1].raw, "/home/*");
+    }
+
+    #[test]
+    fn rule_children_flags_normalization() {
+        let rules = rules_from_kdl(
+            r#"deny "rm" {
+                required-flags "r" "force" "-f" "--verbose"
+            }"#,
+            "deny",
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].conditions.required_flags,
+            set_of(&["-r", "--force", "-f", "--verbose"])
+        );
+    }
+
+    // --- Error cases ---
+
+    #[test]
+    fn rule_invalid_inline_rule_returns_error() {
+        let doc: kdl::KdlDocument = r#"deny "git &&""#.parse().unwrap();
+        let result = collect_rules(&doc, "deny");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ConfigError::ParseError(_)));
+    }
+
+    #[test]
+    fn rule_invalid_glob_returns_error() {
+        let doc: kdl::KdlDocument = r#"deny "rm" {
+            positionals "[invalid"
+        }"#
+        .parse()
+        .unwrap();
+        let result = collect_rules(&doc, "deny");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rule_invalid_required_arguments_format() {
+        let doc: kdl::KdlDocument = r#"deny "curl" {
+            required-arguments "--upload-file"
+        }"#
+        .parse()
+        .unwrap();
+        let result = collect_rules(&doc, "deny");
+        assert!(result.is_err());
     }
 }
