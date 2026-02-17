@@ -9,7 +9,10 @@ pub use bash::BashConfig;
 
 use document::ConfigDocument;
 
-/// Top-level configuration holding tool-specific configs.
+/// Top-level configuration — facade for the rest of the codebase.
+///
+/// Other modules access tool configs through this struct without
+/// needing to know about parsing, KDL, or tool-specific modules.
 #[derive(Debug, Default)]
 pub struct Config {
     pub(crate) bash: Option<BashConfig>,
@@ -27,24 +30,22 @@ pub enum ConfigError {
 }
 
 impl Config {
-    /// Parse a KDL config string.
-    pub fn parse(content: &str) -> Result<Self, ConfigError> {
-        let doc = ConfigDocument::parse(content)?;
-        Ok(Config {
-            bash: Some(section::parse_tool::<BashConfig>(&doc)?),
-        })
+    /// Load config from a file path.
+    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        let doc = ConfigDocument::load(path)?;
+        Self::from_document(&doc)
     }
 
-    /// Load and parse a KDL config file.
-    pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                ConfigError::NotFound(path.to_path_buf())
-            } else {
-                ConfigError::ReadError(e)
-            }
-        })?;
-        Self::parse(&content)
+    /// Parse config from a string.
+    pub fn parse(content: &str) -> Result<Self, ConfigError> {
+        let doc = ConfigDocument::parse(content)?;
+        Self::from_document(&doc)
+    }
+
+    fn from_document(doc: &ConfigDocument) -> Result<Self, ConfigError> {
+        Ok(Config {
+            bash: Some(section::parse_tool::<BashConfig>(doc)?),
+        })
     }
 }
 

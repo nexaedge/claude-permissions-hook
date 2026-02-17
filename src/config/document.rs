@@ -19,9 +19,7 @@ pub(super) struct ParseNode<'a> {
 }
 
 impl ConfigDocument {
-    /// Parse a KDL source string into an owned document.
-    ///
-    /// Returns a `ConfigError::ParseError` on invalid syntax.
+    /// Parse a KDL source string into a document.
     pub(super) fn parse(source: &str) -> Result<Self, super::ConfigError> {
         let doc: kdl::KdlDocument = source
             .parse()
@@ -30,6 +28,18 @@ impl ConfigDocument {
             doc,
             source: source.to_string(),
         })
+    }
+
+    /// Load and parse a KDL config file.
+    pub(super) fn load(path: &std::path::Path) -> Result<Self, super::ConfigError> {
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                super::ConfigError::NotFound(path.to_path_buf())
+            } else {
+                super::ConfigError::ReadError(e)
+            }
+        })?;
+        Self::parse(&content)
     }
 
     /// Get a named top-level section's children as a borrowed `ConfigSection`.
