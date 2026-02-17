@@ -10,8 +10,50 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Check
+  commits:
+    name: Validate commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|chore|ci)(\(.+\))?(!)?: .+'
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            RANGE="${{ github.event.before }}..${{ github.event.after }}"
+          fi
+
+          FAILED=0
+          while IFS= read -r msg; do
+            # Allow merge commits and release commits
+            case "$msg" in
+              Merge*|release:*) continue ;;
+            esac
+
+            if ! echo "$msg" | grep -qE "$PATTERN"; then
+              echo "::error::Invalid commit message: $msg"
+              FAILED=1
+            fi
+          done < <(git log --format='%s' "$RANGE")
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "Commit messages must follow Conventional Commits format:"
+            echo "  type(scope): description"
+            echo ""
+            echo "Valid types: feat, fix, docs, style, refactor, perf, test, chore, ci"
+            exit 1
+          fi
+
+          echo "All commit messages are valid."
+
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,14 +64,24 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
       - name: Format check
         run: cargo fmt --check
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
 
       - name: Tests
         run: cargo nextest run --profile ci
@@ -43,6 +95,16 @@ jobs:
 
       - name: Doc tests
         run: cargo test --doc
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build

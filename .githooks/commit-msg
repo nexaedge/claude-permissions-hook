@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+#
+# Validate that commit messages follow Conventional Commits format.
+# Activate with: git config core.hooksPath .githooks
+
+msg=$(head -1 "$1")
+
+# Allow merge commits and release commits
+case "$msg" in
+  Merge*|release:*) exit 0 ;;
+esac
+
+# Conventional Commits: type(optional-scope)!: description
+if ! echo "$msg" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|chore|ci)(\(.+\))?(!)?: .+'; then
+  echo "ERROR: Commit message does not follow Conventional Commits format."
+  echo ""
+  echo "  Expected: type(scope): description"
+  echo "  Got:      $msg"
+  echo ""
+  echo "  Valid types: feat, fix, docs, style, refactor, perf, test, chore, ci"
+  echo "  Examples:"
+  echo "    feat: add KDL config parser"
+  echo "    fix(protocol): handle empty stdin gracefully"
+  echo "    docs: update CONTRIBUTING guide"
+  echo ""
+  exit 1
+fi

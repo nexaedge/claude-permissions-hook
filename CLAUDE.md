@@ -39,6 +39,7 @@ tests/
 - **Testing:** cargo-nextest (process-per-test isolation)
 - **Linting:** cargo clippy with zero warnings
 - **Formatting:** cargo fmt (rustfmt defaults)
+- **Commits:** Conventional Commits format (`type(scope): description`)
 
 ## Key Patterns
 
@@ -49,6 +50,16 @@ tests/
   - **Enums**: `PermissionMode` is camelCase (`bypassPermissions`), `Decision` is lowercase (`allow`)
 - Fail-safe defaults: parse errors or unexpected input default to "ask"
 - Never `unwrap()` in library code — return `Result` instead
+
+## Releasing
+
+Releases are triggered via GitHub Actions `workflow_dispatch`. Run from CLI:
+
+    gh workflow run release.yml -f version=X.Y.Z
+
+Or use the GitHub Actions UI: Actions > Release > Run workflow > enter version (semver, no `v` prefix).
+
+The workflow gates on main branch, validates semver, checks CI passed, bumps all version files, generates changelog, builds binaries, publishes to npm, and creates a GitHub Release.
 
 ## Public Repository
 

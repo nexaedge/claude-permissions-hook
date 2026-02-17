@@ -23,6 +23,37 @@ cargo build
 cargo install cargo-nextest
 ```
 
+### Enable Commit Message Validation
+
+This project uses a local git hook to validate commit messages:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+## Commit Messages
+
+This project follows [Conventional Commits](https://www.conventionalcommits.org/). Every commit message must match:
+
+```
+type(scope): description
+```
+
+**Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`, `ci`
+
+**Examples:**
+
+```
+feat: add KDL config parser
+fix(protocol): handle empty stdin gracefully
+docs: update CONTRIBUTING guide
+refactor(decision): simplify rule matching logic
+chore: update dependencies
+ci: split CI into parallel jobs
+```
+
+The local git hook (`.githooks/commit-msg`) and CI both enforce this format. Merge commits and `release:` prefixed messages are allowed through automatically.
+
 ## Running Tests
 
 ```bash
@@ -58,10 +89,6 @@ cargo clippy --all-targets
 4. Ensure no lint warnings: `cargo clippy --all-targets`
 5. Ensure formatting is correct: `cargo fmt --check`
 6. Submit a pull request with a clear description of the changes
-
-## Commit Messages
-
-Write clear, descriptive commit messages. Focus on the "why" rather than the "what."
 
 ## License
 
