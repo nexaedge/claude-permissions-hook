@@ -1,13 +1,13 @@
 {
-  "sessionId": "sess-fixture-006",
-  "transcriptPath": "/Users/test/.claude/projects/my-project/transcript.jsonl",
+  "session_id": "sess-fixture-006",
+  "transcript_path": "/Users/test/.claude/projects/my-project/transcript.jsonl",
   "cwd": "/Users/test/code/my-project",
-  "permissionMode": "default",
-  "hookEventName": "PreToolUse",
-  "toolName": "Glob",
-  "toolInput": {
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Glob",
+  "tool_input": {
     "pattern": "**/*.rs",
     "path": "/Users/test/code/my-project/src"
   },
-  "toolUseId": "toolu_06PQR678"
+  "tool_use_id": "toolu_06PQR678"
 }

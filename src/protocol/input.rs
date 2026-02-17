@@ -2,8 +2,10 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// The input received from Claude Code on stdin for a PreToolUse hook.
+///
+/// Field names match the snake_case JSON that Claude Code sends.
+/// Unknown fields are silently ignored for forward compatibility.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct HookInput {
     pub session_id: String,
     pub transcript_path: String,
@@ -33,14 +35,14 @@ mod tests {
 
     fn minimal_input_json() -> serde_json::Value {
         json!({
-            "sessionId": "sess-123",
-            "transcriptPath": "/tmp/transcript.json",
+            "session_id": "sess-123",
+            "transcript_path": "/tmp/transcript.json",
             "cwd": "/home/user/project",
-            "permissionMode": "default",
-            "hookEventName": "PreToolUse",
-            "toolName": "Bash",
-            "toolInput": {"command": "ls"},
-            "toolUseId": "tu-456"
+            "permission_mode": "default",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_use_id": "tu-456"
         })
     }
 
@@ -71,7 +73,7 @@ mod tests {
 
         for (json_value, expected) in modes {
             let mut input = minimal_input_json();
-            input["permissionMode"] = json!(json_value);
+            input["permission_mode"] = json!(json_value);
             let parsed: HookInput =
                 serde_json::from_value(input).expect("should parse permission mode");
             assert_eq!(parsed.permission_mode, expected, "failed for {json_value}");
@@ -87,5 +89,23 @@ mod tests {
         let parsed: HookInput =
             serde_json::from_value(input).expect("unknown fields should not cause failure");
         assert_eq!(parsed.session_id, "sess-123");
+    }
+
+    #[test]
+    fn extra_fields_in_tool_input_are_preserved() {
+        let input = json!({
+            "session_id": "sess-123",
+            "transcript_path": "/tmp/transcript.json",
+            "cwd": "/tmp/test",
+            "permission_mode": "default",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status", "description": "Check git status"},
+            "tool_use_id": "toolu_01XYZ"
+        });
+        let parsed: HookInput =
+            serde_json::from_value(input).expect("should parse input with extra tool_input fields");
+        assert_eq!(parsed.tool_input["command"], "git status");
+        assert_eq!(parsed.tool_input["description"], "Check git status");
     }
 }
