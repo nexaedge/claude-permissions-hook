@@ -103,14 +103,34 @@ fn collect_rules(
 ) -> Result<Vec<rule::BashRule>, ConfigError> {
     let mut rules = Vec::new();
     for node in doc.nodes().iter().filter(|n| n.name().value() == node_name) {
-        for entry in node.entries() {
-            if let Some(value) = entry.value().as_string() {
-                let bash_rule = parse_rule_entry(value)?;
-                rules.push(bash_rule);
-            }
+        let string_entries: Vec<&str> = node
+            .entries()
+            .iter()
+            .filter_map(|e| e.value().as_string())
+            .collect();
+        let has_children = node.children().is_some();
+
+        // Reject children block without any string entry (fail-closed)
+        if has_children && string_entries.is_empty() {
+            return Err(ConfigError::ParseError(format!(
+                "{node_name} node has children block but no program entry"
+            )));
         }
-        // If the node has children, they extend the LAST rule from the inline entries.
-        // e.g., `deny "rm -rf" { optional-flags "g" }` extends the "rm -rf" rule.
+
+        // Reject multiple entries combined with children (ambiguous semantics)
+        if has_children && string_entries.len() > 1 {
+            return Err(ConfigError::ParseError(format!(
+                "{node_name} node has children block with multiple entries; \
+                 use separate nodes instead"
+            )));
+        }
+
+        for value in &string_entries {
+            let bash_rule = parse_rule_entry(value)?;
+            rules.push(bash_rule);
+        }
+
+        // Children extend the single entry when present.
         if let Some(children) = node.children() {
             if let Some(last_rule) = rules.last_mut() {
                 parse_children_block(children, &mut last_rule.conditions)?;
@@ -141,6 +161,14 @@ fn parse_rule_entry(value: &str) -> Result<rule::BashRule, ConfigError> {
     // Parse with command::parse() to get program + args
     let segments = crate::command::parse(trimmed)
         .map_err(|e| ConfigError::ParseError(format!("invalid rule '{trimmed}': {e}")))?;
+
+    // Require exactly one command segment — reject multi-command rules
+    // (e.g., "git status && rm -rf /" would parse to 2 segments)
+    if segments.len() > 1 {
+        return Err(ConfigError::ParseError(format!(
+            "rule '{trimmed}' contains multiple commands; use separate rules instead"
+        )));
+    }
 
     let segment = segments
         .into_iter()
@@ -703,6 +731,44 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ConfigError::ParseError(_)));
+    }
+
+    #[test]
+    fn error_multi_segment_inline_rule() {
+        // "git status && rm -rf /" contains operators → multiple segments → error
+        let doc: kdl::KdlDocument = r#"deny "git status && rm -rf /""#.parse().unwrap();
+        let result = collect_rules(&doc, "deny");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("multiple commands"), "got: {err}");
+    }
+
+    #[test]
+    fn error_children_without_entry() {
+        // deny { required-flags "r" } → no program entry → error
+        let doc: kdl::KdlDocument = r#"deny {
+            required-flags "r"
+        }"#
+        .parse()
+        .unwrap();
+        let result = collect_rules(&doc, "deny");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no program entry"), "got: {err}");
+    }
+
+    #[test]
+    fn error_multi_entry_with_children() {
+        // deny "rm" "mv" { required-flags "f" } → ambiguous → error
+        let doc: kdl::KdlDocument = r#"deny "rm" "mv" {
+            required-flags "f"
+        }"#
+        .parse()
+        .unwrap();
+        let result = collect_rules(&doc, "deny");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("multiple entries"), "got: {err}");
     }
 
     #[test]
