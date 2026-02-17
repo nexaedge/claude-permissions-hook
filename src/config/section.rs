@@ -10,7 +10,7 @@ use super::ConfigError;
 ///
 /// Each tool (bash, write, etc.) implements this to define its section
 /// name and how to build config from the intermediate representation.
-pub(crate) trait ToolConfig: Default + std::fmt::Debug + 'static {
+pub(crate) trait ToolConfig: Default + std::fmt::Debug {
     /// KDL section name (e.g., `"bash"`, `"write"`).
     const SECTION: &'static str;
 

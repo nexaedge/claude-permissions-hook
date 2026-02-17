@@ -30,13 +30,13 @@ fn rules_of(programs: &[&str]) -> Vec<crate::config::rule::BashRule> {
 }
 
 fn make_config(allow: &[&str], deny: &[&str], ask: &[&str]) -> Config {
-    Config::builder()
-        .set(crate::config::BashConfig {
+    Config {
+        bash: Some(crate::config::BashConfig {
             allow: rules_of(allow),
             deny: rules_of(deny),
             ask: rules_of(ask),
-        })
-        .build()
+        }),
+    }
 }
 
 // ---- Test macros ----

@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::config::{BashConfig, Config};
+use crate::config::Config;
 use crate::decision;
 use crate::protocol::HookOutput;
 
@@ -48,11 +48,7 @@ fn home_dir() -> Option<PathBuf> {
 pub fn run(config_path: Option<&Path>) {
     let discovered = config_path.is_none().then(discover_config).flatten();
     let effective_path = config_path.or(discovered.as_deref());
-    let config = effective_path.map(|p| {
-        Config::builder()
-            .register::<BashConfig>()
-            .load(p)
-    });
+    let config = effective_path.map(Config::load);
 
     // Handle config load error: output ask with error message
     let config_ref = match &config {
