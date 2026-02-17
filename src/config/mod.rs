@@ -1,5 +1,5 @@
 pub(crate) mod bash;
-mod kdl;
+mod document;
 pub mod rule;
 pub(crate) mod section;
 
@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 
 pub use bash::BashConfig;
 
-use kdl::KdlParse;
+use document::ConfigDocument;
 use section::ToolConfig;
 
-type ToolParser = Box<dyn Fn(&KdlParse) -> Result<(TypeId, Box<dyn Any>), ConfigError>>;
+type ToolParser = Box<dyn Fn(&ConfigDocument) -> Result<(TypeId, Box<dyn Any>), ConfigError>>;
 
 /// Top-level configuration holding registered tool configs.
 ///
@@ -88,7 +88,7 @@ impl ConfigBuilder {
 
     /// Parse a KDL string, running all registered parsers.
     pub fn parse(self, content: &str) -> Result<Config, ConfigError> {
-        let kdl = KdlParse::parse(content)?;
+        let kdl = ConfigDocument::parse(content)?;
 
         let mut tools = self.prebuilt;
         for parser in &self.parsers {

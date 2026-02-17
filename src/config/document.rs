@@ -1,13 +1,13 @@
-//! KDL abstraction layer.
+//! Config document abstraction layer.
 //!
-//! `KdlParse` and `ParseNode` wrap the `kdl` crate types so the rest of the
-//! config module never touches KDL iterators, entries, or spans directly.
+//! `ConfigDocument`, `ConfigSection`, and `ParseNode` wrap the `kdl` crate
+//! types so the rest of the config module never touches KDL directly.
 
 /// Parsed KDL document paired with its source text.
 ///
 /// Provides section lookup and node iteration that return [`ParseNode`]
 /// wrappers carrying source context for line-number error reporting.
-pub(super) struct KdlParse {
+pub(super) struct ConfigDocument {
     doc: kdl::KdlDocument,
     source: String,
 }
@@ -18,7 +18,7 @@ pub(super) struct ParseNode<'a> {
     source: &'a str,
 }
 
-impl KdlParse {
+impl ConfigDocument {
     /// Parse a KDL source string into an owned document.
     ///
     /// Returns a `ConfigError::ParseError` on invalid syntax.
@@ -32,14 +32,14 @@ impl KdlParse {
         })
     }
 
-    /// Get a named top-level section's children as a borrowed `KdlSection`.
+    /// Get a named top-level section's children as a borrowed `ConfigSection`.
     ///
     /// `section("bash")` returns the contents of the `bash { … }` block.
-    pub(super) fn section(&self, name: &str) -> Option<KdlSection<'_>> {
+    pub(super) fn section(&self, name: &str) -> Option<ConfigSection<'_>> {
         self.doc
             .get(name)
             .and_then(|n| n.children())
-            .map(|doc| KdlSection {
+            .map(|doc| ConfigSection {
                 doc,
                 source: &self.source,
             })
@@ -49,12 +49,12 @@ impl KdlParse {
 /// Borrowed view into a KDL section (children block of a top-level node).
 ///
 /// Provides node iteration for parsing tool sections.
-pub(super) struct KdlSection<'a> {
+pub(super) struct ConfigSection<'a> {
     doc: &'a kdl::KdlDocument,
     source: &'a str,
 }
 
-impl<'a> KdlSection<'a> {
+impl<'a> ConfigSection<'a> {
     /// Iterate over child nodes whose name matches `name`.
     pub(super) fn nodes_named(&self, name: &str) -> Vec<ParseNode<'a>> {
         self.doc
@@ -101,9 +101,9 @@ impl<'a> ParseNode<'a> {
         self.node.children().is_some()
     }
 
-    /// Get the children block as a borrowed `KdlSection` (preserving source).
-    pub(super) fn children(&self) -> Option<KdlSection<'a>> {
-        self.node.children().map(|doc| KdlSection {
+    /// Get the children block as a borrowed `ConfigSection` (preserving source).
+    pub(super) fn children(&self) -> Option<ConfigSection<'a>> {
+        self.node.children().map(|doc| ConfigSection {
             doc,
             source: self.source,
         })
