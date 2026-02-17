@@ -3,14 +3,14 @@ use serde_json::json;
 
 fn make_input(tool_name: &str, permission_mode: &str, tool_input: serde_json::Value) -> HookInput {
     serde_json::from_value(json!({
-        "sessionId": "sess-test",
-        "transcriptPath": "/tmp/transcript.json",
+        "session_id": "sess-test",
+        "transcript_path": "/tmp/transcript.json",
         "cwd": "/home/user/project",
-        "permissionMode": permission_mode,
-        "hookEventName": "PreToolUse",
-        "toolName": tool_name,
-        "toolInput": tool_input,
-        "toolUseId": "tu-test"
+        "permission_mode": permission_mode,
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "tool_use_id": "tu-test"
     }))
     .expect("test input should parse")
 }
@@ -251,3 +251,105 @@ mode_modifier_test!(bypass_allow_stays_allow, decision: Decision::Allow, mode: P
 mode_modifier_test!(bypass_deny_stays_deny,   decision: Decision::Deny,  mode: PermissionMode::BypassPermissions, expect: Decision::Deny);
 mode_modifier_test!(dont_ask_allow_stays,     decision: Decision::Allow, mode: PermissionMode::DontAsk,           expect: Decision::Allow);
 mode_modifier_test!(dont_ask_deny_stays,      decision: Decision::Deny,  mode: PermissionMode::DontAsk,           expect: Decision::Deny);
+
+// ---- Reason message tests ----
+
+/// Helper to extract the reason string from an evaluate() result.
+fn reason_of(input: &HookInput, config: &Config) -> String {
+    evaluate(input, Some(config))
+        .unwrap()
+        .hook_specific_output
+        .permission_decision_reason
+}
+
+#[test]
+fn reason_single_allow() {
+    let config = make_config(&["git"], &[], &[]);
+    let input = bash_input("git status", "default");
+    assert_eq!(
+        reason_of(&input, &config),
+        "claude-permissions-hook: allowed (git)"
+    );
+}
+
+#[test]
+fn reason_multi_allow() {
+    let config = make_config(&["git", "cargo"], &[], &[]);
+    let input = bash_input("git add . && cargo build", "default");
+    assert_eq!(
+        reason_of(&input, &config),
+        "claude-permissions-hook: allowed (git, cargo)"
+    );
+}
+
+#[test]
+fn reason_single_deny() {
+    let config = make_config(&[], &["rm"], &[]);
+    let input = bash_input("rm -rf /", "default");
+    assert_eq!(
+        reason_of(&input, &config),
+        "claude-permissions-hook: 'rm' is in your deny list"
+    );
+}
+
+#[test]
+fn reason_multi_deny() {
+    let config = make_config(&["git"], &["rm"], &[]);
+    let input = bash_input("git add && rm -rf /", "default");
+    assert_eq!(
+        reason_of(&input, &config),
+        "claude-permissions-hook: 'rm' is denied (in: git, rm)"
+    );
+}
+
+#[test]
+fn reason_single_ask() {
+    let config = make_config(&[], &[], &["docker"]);
+    let input = bash_input("docker run ubuntu", "default");
+    assert_eq!(
+        reason_of(&input, &config),
+        "claude-permissions-hook: 'docker' requires confirmation"
+    );
+}
+
+#[test]
+fn reason_multi_ask() {
+    let config = make_config(&["git"], &[], &["docker"]);
+    let input = bash_input("git pull && docker run ubuntu", "default");
+    assert_eq!(
+        reason_of(&input, &config),
+        "claude-permissions-hook: 'docker' requires confirmation (in: git, docker)"
+    );
+}
+
+#[test]
+fn reason_unlisted_triggers_ask_with_listed() {
+    // git is allowed, ls is unlisted → defaults to Ask → Ask wins
+    let config = make_config(&["git"], &[], &[]);
+    let input = bash_input("git status && ls", "default");
+    let reason = reason_of(&input, &config);
+    assert_eq!(
+        reason,
+        "claude-permissions-hook: 'ls' requires confirmation (in: git, ls)"
+    );
+}
+
+#[test]
+fn reason_bypass_converts_ask_to_allow() {
+    let config = make_config(&[], &[], &["docker"]);
+    let input = bash_input("docker run", "bypassPermissions");
+    assert_eq!(
+        reason_of(&input, &config),
+        "claude-permissions-hook: allowed (docker)"
+    );
+}
+
+#[test]
+fn reason_dont_ask_converts_ask_to_deny() {
+    let config = make_config(&[], &[], &["docker"]);
+    let input = bash_input("docker run", "dontAsk");
+    assert_eq!(
+        reason_of(&input, &config),
+        "claude-permissions-hook: 'docker' is in your deny list"
+    );
+}

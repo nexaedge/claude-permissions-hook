@@ -52,20 +52,20 @@ pub fn evaluate(input: &HookInput, config: Option<&Config>) -> Option<HookOutput
     }
 
     // Look up each program
-    let decisions: Vec<Option<Decision>> = segments
+    let per_program: Vec<Option<Decision>> = segments
         .iter()
         .map(|seg| config.bash.lookup(&seg.program))
         .collect();
 
     // Aggregate decisions
-    let aggregated = aggregate_decisions(&decisions);
+    let aggregated = aggregate_decisions(&per_program);
 
     // Apply permission mode modifier
     match aggregated {
         Some(decision) => {
-            let modified = apply_mode_modifier(decision, &input.permission_mode);
+            let modified = apply_mode_modifier(decision.clone(), &input.permission_mode);
             let programs: Vec<&str> = segments.iter().map(|s| s.program.as_str()).collect();
-            let reason = format!("programs: [{}]", programs.join(", "));
+            let reason = build_reason(&modified, &programs, &per_program, &decision);
             Some(match modified {
                 Decision::Allow => HookOutput::allow(reason),
                 Decision::Ask => HookOutput::ask(reason),
@@ -74,6 +74,77 @@ pub fn evaluate(input: &HookInput, config: Option<&Config>) -> Option<HookOutput
         }
         None => None,
     }
+}
+
+const APP_NAME: &str = "claude-permissions-hook";
+
+/// Build a human-readable reason string for the decision.
+///
+/// `modified` is the final decision (after mode modifier).
+/// `programs` is the full list of program names in the command.
+/// `per_program` is the per-program lookup results (before aggregation).
+/// `pre_modifier` is the aggregated decision before mode modifier was applied.
+fn build_reason(
+    modified: &Decision,
+    programs: &[&str],
+    per_program: &[Option<Decision>],
+    pre_modifier: &Decision,
+) -> String {
+    let is_single = programs.len() == 1;
+    match modified {
+        Decision::Allow => {
+            format!("{APP_NAME}: allowed ({})", programs.join(", "))
+        }
+        Decision::Deny => {
+            let trigger = find_trigger(programs, per_program, pre_modifier);
+            if is_single {
+                format!("{APP_NAME}: '{trigger}' is in your deny list")
+            } else {
+                format!(
+                    "{APP_NAME}: '{trigger}' is denied (in: {})",
+                    programs.join(", ")
+                )
+            }
+        }
+        Decision::Ask => {
+            let trigger = find_trigger(programs, per_program, pre_modifier);
+            if is_single {
+                format!("{APP_NAME}: '{trigger}' requires confirmation")
+            } else {
+                format!(
+                    "{APP_NAME}: '{trigger}' requires confirmation (in: {})",
+                    programs.join(", ")
+                )
+            }
+        }
+    }
+}
+
+/// Find the program that triggered the most restrictive decision.
+///
+/// Searches for an explicit match first (program whose config decision equals the target),
+/// then falls back to unlisted programs (which default to Ask during aggregation).
+fn find_trigger<'a>(
+    programs: &[&'a str],
+    per_program: &[Option<Decision>],
+    target: &Decision,
+) -> &'a str {
+    // First: find a program explicitly configured with the target decision
+    for (prog, dec) in programs.iter().zip(per_program.iter()) {
+        if dec.as_ref() == Some(target) {
+            return prog;
+        }
+    }
+    // Second: if target is Ask, find an unlisted program (None defaults to Ask)
+    if *target == Decision::Ask {
+        for (prog, dec) in programs.iter().zip(per_program.iter()) {
+            if dec.is_none() {
+                return prog;
+            }
+        }
+    }
+    // Fallback (shouldn't happen with valid aggregation)
+    programs[0]
 }
 
 /// Aggregate multiple per-program decisions into a single decision.
