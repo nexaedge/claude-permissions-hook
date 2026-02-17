@@ -1,8 +1,8 @@
 pub mod rule;
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::command::CommandSegment;
 use crate::protocol::Decision;
 
 /// Top-level configuration loaded from a KDL file.
@@ -11,12 +11,12 @@ pub struct Config {
     pub bash: BashConfig,
 }
 
-/// Bash-specific configuration: sets of programs to allow, deny, or ask about.
+/// Bash-specific configuration: rules for allow, deny, or ask decisions.
 #[derive(Debug, Default)]
 pub struct BashConfig {
-    pub allow: HashSet<String>,
-    pub deny: HashSet<String>,
-    pub ask: HashSet<String>,
+    pub allow: Vec<rule::BashRule>,
+    pub deny: Vec<rule::BashRule>,
+    pub ask: Vec<rule::BashRule>,
 }
 
 /// Errors that can occur when loading or parsing a config file.
@@ -63,42 +63,34 @@ impl Config {
 impl BashConfig {
     fn from_children(children: &kdl::KdlDocument) -> Result<Self, ConfigError> {
         Ok(BashConfig {
-            allow: collect_programs(children, "allow"),
-            deny: collect_programs(children, "deny"),
-            ask: collect_programs(children, "ask"),
+            allow: collect_rules(children, "allow")?,
+            deny: collect_rules(children, "deny")?,
+            ask: collect_rules(children, "ask")?,
         })
     }
 
-    /// Look up a program name and return its configured decision.
+    /// Look up a command segment and return its configured decision.
     ///
     /// Normalizes paths to basenames before lookup: `/bin/rm` matches a `deny "rm"` rule.
     /// Precedence: deny > ask > allow. Returns `None` for unlisted programs.
-    pub fn lookup(&self, program: &str) -> Option<Decision> {
-        let normalized = std::path::Path::new(program)
+    ///
+    /// Currently matches on program name only. Full condition matching (flags,
+    /// positionals, subcommands) is implemented in Step 03.
+    pub fn lookup(&self, segment: &CommandSegment) -> Option<Decision> {
+        let normalized = std::path::Path::new(&segment.program)
             .file_name()
             .and_then(|f| f.to_str())
-            .unwrap_or(program);
-        if self.deny.contains(normalized) {
+            .unwrap_or(&segment.program);
+        if self.deny.iter().any(|r| r.program == normalized) {
             Some(Decision::Deny)
-        } else if self.ask.contains(normalized) {
+        } else if self.ask.iter().any(|r| r.program == normalized) {
             Some(Decision::Ask)
-        } else if self.allow.contains(normalized) {
+        } else if self.allow.iter().any(|r| r.program == normalized) {
             Some(Decision::Allow)
         } else {
             None
         }
     }
-}
-
-/// Collect all string arguments from nodes with the given name.
-/// Handles multiple nodes: `allow "git"` + `allow "cargo"` merges into one set.
-fn collect_programs(doc: &kdl::KdlDocument, node_name: &str) -> HashSet<String> {
-    doc.nodes()
-        .iter()
-        .filter(|n| n.name().value() == node_name)
-        .flat_map(|n| n.entries())
-        .filter_map(|e| e.value().as_string().map(String::from))
-        .collect()
 }
 
 /// Collect all rules from nodes with the given name.
@@ -135,9 +127,7 @@ fn collect_rules(
 fn parse_rule_entry(value: &str) -> Result<rule::BashRule, ConfigError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(ConfigError::ParseError(
-            "empty rule string".to_string(),
-        ));
+        return Err(ConfigError::ParseError("empty rule string".to_string()));
     }
 
     // Simple program name: no spaces → empty conditions
@@ -152,9 +142,10 @@ fn parse_rule_entry(value: &str) -> Result<rule::BashRule, ConfigError> {
     let segments = crate::command::parse(trimmed)
         .map_err(|e| ConfigError::ParseError(format!("invalid rule '{trimmed}': {e}")))?;
 
-    let segment = segments.into_iter().next().ok_or_else(|| {
-        ConfigError::ParseError(format!("no program found in rule '{trimmed}'"))
-    })?;
+    let segment = segments
+        .into_iter()
+        .next()
+        .ok_or_else(|| ConfigError::ParseError(format!("no program found in rule '{trimmed}'")))?;
 
     let mut conditions = rule::RuleConditions::default();
     for arg in &segment.args {
@@ -195,22 +186,17 @@ fn parse_children_block(
         match name {
             "required-flags" => {
                 for v in &values {
-                    conditions
-                        .required_flags
-                        .insert(rule::normalize_flag(v));
+                    conditions.required_flags.insert(rule::normalize_flag(v));
                 }
             }
             "optional-flags" => {
                 for v in &values {
-                    conditions
-                        .optional_flags
-                        .insert(rule::normalize_flag(v));
+                    conditions.optional_flags.insert(rule::normalize_flag(v));
                 }
             }
             "positionals" => {
                 for v in &values {
-                    let pattern = rule::compile_glob(v)
-                        .map_err(|e| ConfigError::ParseError(e))?;
+                    let pattern = rule::compile_glob(v).map_err(ConfigError::ParseError)?;
                     conditions.positionals.push(pattern);
                 }
             }
@@ -222,16 +208,14 @@ fn parse_children_block(
             }
             "subcommands" => {
                 for v in &values {
-                    let chain: Vec<String> =
-                        v.split_whitespace().map(String::from).collect();
+                    let chain: Vec<String> = v.split_whitespace().map(String::from).collect();
                     conditions.subcommands.push(chain);
                 }
             }
             _ => {
                 // Named positional matcher (e.g., `files "/*"`, `remotes "linear"`)
                 for v in &values {
-                    let pattern = rule::compile_glob(v)
-                        .map_err(|e| ConfigError::ParseError(e))?;
+                    let pattern = rule::compile_glob(v).map_err(ConfigError::ParseError)?;
                     conditions.positionals.push(pattern);
                 }
             }
@@ -249,7 +233,7 @@ fn parse_argument_pattern(value: &str) -> Result<rule::ArgumentPattern, ConfigEr
         )));
     }
     let flag = parts[0].to_string();
-    let pattern = rule::compile_glob(parts[1]).map_err(|e| ConfigError::ParseError(e))?;
+    let pattern = rule::compile_glob(parts[1]).map_err(ConfigError::ParseError)?;
     Ok(rule::ArgumentPattern {
         flag,
         value: pattern,
@@ -259,14 +243,41 @@ fn parse_argument_pattern(value: &str) -> Result<rule::ArgumentPattern, ConfigEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    // --- KDL Parsing Tests ---
+    // --- Helpers ---
 
     fn set_of(items: &[&str]) -> HashSet<String> {
         items.iter().map(|s| s.to_string()).collect()
     }
+
+    /// Create simple unconditional rules from program names.
+    fn rules_of(programs: &[&str]) -> Vec<rule::BashRule> {
+        programs
+            .iter()
+            .map(|p| rule::BashRule {
+                program: p.to_string(),
+                conditions: rule::RuleConditions::default(),
+            })
+            .collect()
+    }
+
+    /// Helper to create a CommandSegment for lookup tests.
+    fn seg(program: &str) -> CommandSegment {
+        CommandSegment {
+            program: program.to_string(),
+            args: vec![],
+        }
+    }
+
+    /// Extract program names from rules for assertion.
+    fn program_names(rules: &[rule::BashRule]) -> Vec<&str> {
+        rules.iter().map(|r| r.program.as_str()).collect()
+    }
+
+    // --- KDL Parsing Tests ---
 
     #[test]
     fn parse_valid_kdl_with_all_sections() {
@@ -281,9 +292,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.bash.allow, set_of(&["git", "cargo", "npm"]));
-        assert_eq!(config.bash.deny, set_of(&["rm", "shutdown"]));
-        assert_eq!(config.bash.ask, set_of(&["docker", "kubectl"]));
+        let mut allow_names: Vec<&str> = program_names(&config.bash.allow);
+        allow_names.sort();
+        assert_eq!(allow_names, vec!["cargo", "git", "npm"]);
+        let mut deny_names: Vec<&str> = program_names(&config.bash.deny);
+        deny_names.sort();
+        assert_eq!(deny_names, vec!["rm", "shutdown"]);
+        let mut ask_names: Vec<&str> = program_names(&config.bash.ask);
+        ask_names.sort();
+        assert_eq!(ask_names, vec!["docker", "kubectl"]);
     }
 
     #[test]
@@ -297,7 +314,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.bash.allow, set_of(&["git"]));
+        assert_eq!(program_names(&config.bash.allow), vec!["git"]);
         assert!(config.bash.deny.is_empty());
         assert!(config.bash.ask.is_empty());
     }
@@ -323,7 +340,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.bash.allow, set_of(&["git", "cargo", "npm"]));
+        assert_eq!(
+            program_names(&config.bash.allow),
+            vec!["git", "cargo", "npm"]
+        );
     }
 
     #[test]
@@ -338,61 +358,61 @@ mod tests {
     #[test]
     fn lookup_program_in_allow_list() {
         let bash = BashConfig {
-            allow: set_of(&["git"]),
-            deny: HashSet::new(),
-            ask: HashSet::new(),
+            allow: rules_of(&["git"]),
+            deny: vec![],
+            ask: vec![],
         };
-        assert_eq!(bash.lookup("git"), Some(Decision::Allow));
+        assert_eq!(bash.lookup(&seg("git")), Some(Decision::Allow));
     }
 
     #[test]
     fn lookup_program_in_deny_list() {
         let bash = BashConfig {
-            allow: HashSet::new(),
-            deny: set_of(&["rm"]),
-            ask: HashSet::new(),
+            allow: vec![],
+            deny: rules_of(&["rm"]),
+            ask: vec![],
         };
-        assert_eq!(bash.lookup("rm"), Some(Decision::Deny));
+        assert_eq!(bash.lookup(&seg("rm")), Some(Decision::Deny));
     }
 
     #[test]
     fn lookup_program_in_ask_list() {
         let bash = BashConfig {
-            allow: HashSet::new(),
-            deny: HashSet::new(),
-            ask: set_of(&["docker"]),
+            allow: vec![],
+            deny: vec![],
+            ask: rules_of(&["docker"]),
         };
-        assert_eq!(bash.lookup("docker"), Some(Decision::Ask));
+        assert_eq!(bash.lookup(&seg("docker")), Some(Decision::Ask));
     }
 
     #[test]
     fn lookup_unlisted_program_returns_none() {
         let bash = BashConfig {
-            allow: set_of(&["git"]),
-            deny: set_of(&["rm"]),
-            ask: set_of(&["docker"]),
+            allow: rules_of(&["git"]),
+            deny: rules_of(&["rm"]),
+            ask: rules_of(&["docker"]),
         };
-        assert_eq!(bash.lookup("python"), None);
+        assert_eq!(bash.lookup(&seg("python")), None);
     }
 
     #[test]
     fn lookup_program_in_both_allow_and_deny_returns_deny() {
         let bash = BashConfig {
-            allow: set_of(&["rm"]),
-            deny: set_of(&["rm"]),
-            ask: HashSet::new(),
+            allow: rules_of(&["rm"]),
+            deny: rules_of(&["rm"]),
+            ask: vec![],
         };
-        assert_eq!(bash.lookup("rm"), Some(Decision::Deny));
+        assert_eq!(bash.lookup(&seg("rm")), Some(Decision::Deny));
     }
 
     #[test]
     fn lookup_program_in_both_allow_and_ask_returns_ask() {
         let bash = BashConfig {
-            allow: set_of(&["docker"]),
-            deny: HashSet::new(),
-            ask: set_of(&["docker"]),
+            allow: rules_of(&["docker"]),
+            deny: vec![],
+            ask: rules_of(&["docker"]),
         };
-        assert_eq!(bash.lookup("docker"), Some(Decision::Ask));
+        assert_eq!(bash.lookup(&seg("docker")), Some(Decision::Ask));
     }
 
     // --- File Loading Tests ---
@@ -417,8 +437,8 @@ mod tests {
         .unwrap();
 
         let config = Config::load(tmpfile.path()).unwrap();
-        assert_eq!(config.bash.allow, set_of(&["git", "cargo"]));
-        assert_eq!(config.bash.deny, set_of(&["rm"]));
+        assert_eq!(program_names(&config.bash.allow), vec!["git", "cargo"]);
+        assert_eq!(program_names(&config.bash.deny), vec!["rm"]);
     }
 
     // --- Basename normalization tests ---
@@ -426,22 +446,22 @@ mod tests {
     #[test]
     fn lookup_absolute_path_matches_basename() {
         let bash = BashConfig {
-            allow: HashSet::new(),
-            deny: set_of(&["rm"]),
-            ask: HashSet::new(),
+            allow: vec![],
+            deny: rules_of(&["rm"]),
+            ask: vec![],
         };
-        assert_eq!(bash.lookup("/bin/rm"), Some(Decision::Deny));
-        assert_eq!(bash.lookup("/usr/bin/rm"), Some(Decision::Deny));
+        assert_eq!(bash.lookup(&seg("/bin/rm")), Some(Decision::Deny));
+        assert_eq!(bash.lookup(&seg("/usr/bin/rm")), Some(Decision::Deny));
     }
 
     #[test]
     fn lookup_relative_path_matches_basename() {
         let bash = BashConfig {
-            allow: set_of(&["deploy"]),
-            deny: HashSet::new(),
-            ask: HashSet::new(),
+            allow: rules_of(&["deploy"]),
+            deny: vec![],
+            ask: vec![],
         };
-        assert_eq!(bash.lookup("./scripts/deploy"), Some(Decision::Allow));
+        assert_eq!(bash.lookup(&seg("./scripts/deploy")), Some(Decision::Allow));
     }
 
     #[test]
@@ -486,10 +506,7 @@ mod tests {
         let rules = rules_from_kdl(r#"deny "rm -rf /""#, "deny");
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "rm");
-        assert_eq!(
-            rules[0].conditions.required_flags,
-            set_of(&["-r", "-f"])
-        );
+        assert_eq!(rules[0].conditions.required_flags, set_of(&["-r", "-f"]));
         assert_eq!(rules[0].conditions.subcommand, vec!["/"]);
     }
 
@@ -499,10 +516,7 @@ mod tests {
         let rules = rules_from_kdl(r#"deny "rm -rf""#, "deny");
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "rm");
-        assert_eq!(
-            rules[0].conditions.required_flags,
-            set_of(&["-r", "-f"])
-        );
+        assert_eq!(rules[0].conditions.required_flags, set_of(&["-r", "-f"]));
         assert!(rules[0].conditions.subcommand.is_empty());
     }
 
@@ -512,10 +526,7 @@ mod tests {
         let rules = rules_from_kdl(r#"deny "git push --force""#, "deny");
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "git");
-        assert_eq!(
-            rules[0].conditions.required_flags,
-            set_of(&["--force"])
-        );
+        assert_eq!(rules[0].conditions.required_flags, set_of(&["--force"]));
         assert_eq!(rules[0].conditions.subcommand, vec!["push"]);
     }
 
@@ -531,10 +542,7 @@ mod tests {
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "rm");
-        assert_eq!(
-            rules[0].conditions.required_flags,
-            set_of(&["-r", "-f"])
-        );
+        assert_eq!(rules[0].conditions.required_flags, set_of(&["-r", "-f"]));
     }
 
     #[test]
@@ -546,10 +554,7 @@ mod tests {
             "deny",
         );
         assert_eq!(rules.len(), 1);
-        assert_eq!(
-            rules[0].conditions.optional_flags,
-            set_of(&["--force"])
-        );
+        assert_eq!(rules[0].conditions.optional_flags, set_of(&["--force"]));
     }
 
     #[test]
@@ -580,10 +585,7 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].conditions.subcommands.len(), 2);
         assert_eq!(rules[0].conditions.subcommands[0], vec!["status"]);
-        assert_eq!(
-            rules[0].conditions.subcommands[1],
-            vec!["push", "origin"]
-        );
+        assert_eq!(rules[0].conditions.subcommands[1], vec!["push", "origin"]);
     }
 
     #[test]
@@ -612,10 +614,7 @@ mod tests {
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "claude");
-        assert_eq!(
-            rules[0].conditions.subcommand,
-            vec!["mcp", "add"]
-        );
+        assert_eq!(rules[0].conditions.subcommand, vec!["mcp", "add"]);
         assert_eq!(rules[0].conditions.positionals.len(), 1);
         assert_eq!(rules[0].conditions.positionals[0].raw, "linear");
     }

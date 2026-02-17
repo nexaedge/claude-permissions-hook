@@ -19,12 +19,22 @@ fn bash_input(command: &str, mode: &str) -> HookInput {
     make_input("Bash", mode, json!({"command": command}))
 }
 
+fn rules_of(programs: &[&str]) -> Vec<crate::config::rule::BashRule> {
+    programs
+        .iter()
+        .map(|p| crate::config::rule::BashRule {
+            program: p.to_string(),
+            conditions: crate::config::rule::RuleConditions::default(),
+        })
+        .collect()
+}
+
 fn make_config(allow: &[&str], deny: &[&str], ask: &[&str]) -> Config {
     Config {
         bash: crate::config::BashConfig {
-            allow: allow.iter().map(|s| s.to_string()).collect(),
-            deny: deny.iter().map(|s| s.to_string()).collect(),
-            ask: ask.iter().map(|s| s.to_string()).collect(),
+            allow: rules_of(allow),
+            deny: rules_of(deny),
+            ask: rules_of(ask),
         },
     }
 }
