@@ -30,20 +30,99 @@ pub enum ConfigError {
     ParseError(String),
 }
 
-/// KDL document paired with its source text for error location reporting.
+// ---------------------------------------------------------------------------
+// KDL abstraction layer
+//
+// KdlParse / ParseNode wrap the kdl crate types so that the rest of this
+// module never touches KDL iterators, entries, or spans directly.
+// ---------------------------------------------------------------------------
+
+/// Parsed KDL document paired with its source text.
 ///
-/// KDL nodes carry byte-offset spans from parsing. This wrapper preserves the
-/// original source so we can convert those offsets to 1-based line numbers in
-/// error messages without threading the source string through every function.
+/// Provides section lookup and node iteration that return [`ParseNode`]
+/// wrappers carrying source context for line-number error reporting.
 struct KdlParse<'a> {
     doc: &'a kdl::KdlDocument,
     source: &'a str,
 }
 
-impl KdlParse<'_> {
-    /// Return the 1-based line number of a KDL node in the original source.
-    fn line_of(&self, node: &kdl::KdlNode) -> usize {
-        let offset = node.span().offset();
+/// Single KDL node with source context for line-number reporting.
+struct ParseNode<'a> {
+    node: &'a kdl::KdlNode,
+    source: &'a str,
+}
+
+impl<'a> KdlParse<'a> {
+    /// Get a named top-level section's children as a new `KdlParse`.
+    ///
+    /// `section("bash")` returns the contents of the `bash { … }` block.
+    fn section(&self, name: &str) -> Option<KdlParse<'a>> {
+        self.doc
+            .get(name)
+            .and_then(|n| n.children())
+            .map(|doc| KdlParse {
+                doc,
+                source: self.source,
+            })
+    }
+
+    /// Iterate over child nodes whose name matches `name`.
+    fn nodes_named(&self, name: &str) -> Vec<ParseNode<'a>> {
+        self.doc
+            .nodes()
+            .iter()
+            .filter(|n| n.name().value() == name)
+            .map(|node| ParseNode {
+                node,
+                source: self.source,
+            })
+            .collect()
+    }
+
+    /// Iterate over all child nodes.
+    fn nodes(&self) -> Vec<ParseNode<'a>> {
+        self.doc
+            .nodes()
+            .iter()
+            .map(|node| ParseNode {
+                node,
+                source: self.source,
+            })
+            .collect()
+    }
+}
+
+impl<'a> ParseNode<'a> {
+    /// The node's identifier (e.g. `"deny"`, `"required-flags"`).
+    fn name(&self) -> &str {
+        self.node.name().value()
+    }
+
+    /// Collect all string-valued entries from this node.
+    fn string_values(&self) -> Vec<&'a str> {
+        self.node
+            .entries()
+            .iter()
+            .filter_map(|e| e.value().as_string())
+            .collect()
+    }
+
+    /// Whether this node has a children block `{ … }`.
+    fn has_children(&self) -> bool {
+        self.node.children().is_some()
+    }
+
+    /// Get the children block as a new `KdlParse` (preserving source).
+    fn children(&self) -> Option<KdlParse<'a>> {
+        self.node.children().map(|doc| KdlParse {
+            doc,
+            source: self.source,
+        })
+    }
+
+    /// 1-based line number of this node in the original source.
+    fn line(&self) -> usize {
+        let offset = self.node.span().offset();
         self.source[..offset.min(self.source.len())]
             .bytes()
             .filter(|&b| b == b'\n')
@@ -78,14 +157,8 @@ impl Config {
     }
 
     fn from_document(kdl: &KdlParse) -> Result<Self, ConfigError> {
-        let bash = match kdl.doc.get("bash").and_then(|n| n.children()) {
-            Some(children) => {
-                let child_kdl = KdlParse {
-                    doc: children,
-                    source: kdl.source,
-                };
-                BashConfig::from_children(&child_kdl)?
-            }
+        let bash = match kdl.section("bash") {
+            Some(bash_kdl) => BashConfig::from_children(&bash_kdl)?,
             None => BashConfig::default(),
         };
         Ok(Config { bash })
@@ -134,24 +207,19 @@ fn collect_rules(
     node_name: &str,
 ) -> Result<Vec<rule::BashRule>, ConfigError> {
     let mut rules = Vec::new();
-    for node in kdl.doc.nodes().iter().filter(|n| n.name().value() == node_name) {
-        let line = kdl.line_of(node);
-        let string_entries: Vec<&str> = node
-            .entries()
-            .iter()
-            .filter_map(|e| e.value().as_string())
-            .collect();
-        let has_children = node.children().is_some();
+    for node in kdl.nodes_named(node_name) {
+        let line = node.line();
+        let string_entries = node.string_values();
 
         // Reject children block without any string entry (fail-closed)
-        if has_children && string_entries.is_empty() {
+        if node.has_children() && string_entries.is_empty() {
             return Err(ConfigError::ParseError(format!(
                 "line {line}: {node_name} node has a children block but no program entry"
             )));
         }
 
         // Reject multiple entries combined with children (ambiguous semantics)
-        if has_children && string_entries.len() > 1 {
+        if node.has_children() && string_entries.len() > 1 {
             return Err(ConfigError::ParseError(format!(
                 "line {line}: {node_name} node has a children block with multiple entries; \
                  use separate nodes instead"
@@ -168,14 +236,14 @@ fn collect_rules(
         };
 
         for value in &string_entries {
-            let bash_rule = parse_rule_entry(value).map_err(at_line)?;
+            let bash_rule = parse_rule_entry(value).map_err(&at_line)?;
             rules.push(bash_rule);
         }
 
         // Children extend the single entry when present.
         if let Some(children) = node.children() {
             if let Some(last_rule) = rules.last_mut() {
-                parse_children_block(children, &mut last_rule.conditions).map_err(at_line)?;
+                parse_children_block(&children, &mut last_rule.conditions)?;
             }
         }
     }
@@ -242,16 +310,21 @@ fn parse_rule_entry(value: &str) -> Result<rule::BashRule, ConfigError> {
 /// - `subcommands "status" "push origin"` → split to subcommand chains
 /// - Any other name → named positional matcher (add to positionals)
 fn parse_children_block(
-    children: &kdl::KdlDocument,
+    kdl: &KdlParse,
     conditions: &mut rule::RuleConditions,
 ) -> Result<(), ConfigError> {
-    for node in children.nodes() {
-        let name = node.name().value();
-        let values: Vec<String> = node
-            .entries()
-            .iter()
-            .filter_map(|e| e.value().as_string().map(String::from))
-            .collect();
+    for node in kdl.nodes() {
+        let name = node.name();
+        let values = node.string_values();
+        let line = node.line();
+
+        let glob_at_line = |msg: String| ConfigError::ParseError(format!("line {line}: {msg}"));
+        let err_at_line = |e: ConfigError| match e {
+            ConfigError::ParseError(msg) => {
+                ConfigError::ParseError(format!("line {line}: {msg}"))
+            }
+            other => other,
+        };
 
         match name {
             "required-flags" => {
@@ -266,13 +339,13 @@ fn parse_children_block(
             }
             "positionals" => {
                 for v in &values {
-                    let pattern = rule::compile_glob(v).map_err(ConfigError::ParseError)?;
+                    let pattern = rule::compile_glob(v).map_err(&glob_at_line)?;
                     conditions.positionals.push(pattern);
                 }
             }
             "required-arguments" => {
                 for v in &values {
-                    let pattern = parse_argument_pattern(v)?;
+                    let pattern = parse_argument_pattern(v).map_err(&err_at_line)?;
                     conditions.required_arguments.push(pattern);
                 }
             }
@@ -285,7 +358,7 @@ fn parse_children_block(
             _ => {
                 // Named positional matcher (e.g., `files "/*"`, `remotes "linear"`)
                 for v in &values {
-                    let pattern = rule::compile_glob(v).map_err(ConfigError::ParseError)?;
+                    let pattern = rule::compile_glob(v).map_err(&glob_at_line)?;
                     conditions.positionals.push(pattern);
                 }
             }
@@ -742,7 +815,7 @@ mod tests {
         }"#,
             "deny",
         );
-        assert!(err.contains("line 1"), "should include line number, got: {err}");
+        assert!(err.contains("line 2"), "should include line number, got: {err}");
     }
 
     #[test]
@@ -753,7 +826,7 @@ mod tests {
         }"#,
             "deny",
         );
-        assert!(err.contains("line 1"), "should include line number, got: {err}");
+        assert!(err.contains("line 2"), "should include line number, got: {err}");
     }
 
     #[test]
