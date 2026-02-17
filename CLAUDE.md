@@ -43,7 +43,10 @@ tests/
 ## Key Patterns
 
 - `main.rs` is thin — delegates to library code immediately
-- All public types derive `Serialize`/`Deserialize` with `#[serde(rename_all = "camelCase")]`
+- Wire format conventions differ by direction:
+  - **Input** (`HookInput`): snake_case fields — matches what Claude Code sends
+  - **Output** (`HookOutput`, `PreToolUseOutput`): camelCase fields — matches what Claude Code expects
+  - **Enums**: `PermissionMode` is camelCase (`bypassPermissions`), `Decision` is lowercase (`allow`)
 - Fail-safe defaults: parse errors or unexpected input default to "ask"
 - Never `unwrap()` in library code — return `Result` instead
 

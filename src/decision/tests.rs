@@ -374,3 +374,77 @@ fn reason_explicit_deny_not_affected_by_mode_text() {
         "claude-permissions-hook: 'rm' is in your deny list"
     );
 }
+
+// ---- Path normalization: absolute paths match basename ----
+
+bash_decision_test!(absolute_path_deny,
+    cmd: "/bin/rm -rf /", mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);
+
+bash_decision_test!(absolute_path_allow,
+    cmd: "/usr/bin/git status", mode: "default",
+    allow: ["git"], deny: [], ask: [],
+    expect: Decision::Allow);
+
+// ---- Wrapper unwrapping ----
+
+bash_decision_test!(wrapper_command_deny,
+    cmd: "command rm -rf /", mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);
+
+bash_decision_test!(wrapper_env_deny,
+    cmd: "env rm -rf /", mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);
+
+bash_decision_test!(wrapper_env_with_opts_deny,
+    cmd: "env -i FOO=bar rm -rf /", mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);
+
+bash_decision_test!(wrapper_nohup_deny,
+    cmd: "nohup rm -rf /", mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);
+
+bash_decision_test!(wrapper_nested_deny,
+    cmd: "env command rm -rf /", mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);
+
+bash_decision_test!(wrapper_absolute_env_deny,
+    cmd: "/usr/bin/env rm -rf /", mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);
+
+bash_decision_test!(wrapper_command_allow,
+    cmd: "command git status", mode: "default",
+    allow: ["git"], deny: [], ask: [],
+    expect: Decision::Allow);
+
+bash_decision_test!(wrapper_env_allow,
+    cmd: "env git pull", mode: "default",
+    allow: ["git"], deny: [], ask: [],
+    expect: Decision::Allow);
+
+bash_decision_test!(wrapper_env_u_deny,
+    cmd: "env -u PATH rm -rf /", mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);
+
+bash_decision_test!(wrapper_exec_a_deny,
+    cmd: "exec -a fake rm -rf /", mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);
+
+bash_decision_test!(wrapper_env_p_deny,
+    cmd: "env -P /usr/bin rm -rf /", mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);
+
+bash_decision_test!(wrapper_env_split_string_deny,
+    cmd: r#"env -S "rm -rf /""#, mode: "default",
+    allow: [], deny: ["rm"], ask: [],
+    expect: Decision::Deny);

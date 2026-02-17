@@ -69,13 +69,18 @@ impl BashConfig {
 
     /// Look up a program name and return its configured decision.
     ///
+    /// Normalizes paths to basenames before lookup: `/bin/rm` matches a `deny "rm"` rule.
     /// Precedence: deny > ask > allow. Returns `None` for unlisted programs.
     pub fn lookup(&self, program: &str) -> Option<Decision> {
-        if self.deny.contains(program) {
+        let normalized = std::path::Path::new(program)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(program);
+        if self.deny.contains(normalized) {
             Some(Decision::Deny)
-        } else if self.ask.contains(program) {
+        } else if self.ask.contains(normalized) {
             Some(Decision::Ask)
-        } else if self.allow.contains(program) {
+        } else if self.allow.contains(normalized) {
             Some(Decision::Allow)
         } else {
             None
@@ -257,6 +262,29 @@ mod tests {
         let config = Config::load(tmpfile.path()).unwrap();
         assert_eq!(config.bash.allow, set_of(&["git", "cargo"]));
         assert_eq!(config.bash.deny, set_of(&["rm"]));
+    }
+
+    // --- Basename normalization tests ---
+
+    #[test]
+    fn lookup_absolute_path_matches_basename() {
+        let bash = BashConfig {
+            allow: HashSet::new(),
+            deny: set_of(&["rm"]),
+            ask: HashSet::new(),
+        };
+        assert_eq!(bash.lookup("/bin/rm"), Some(Decision::Deny));
+        assert_eq!(bash.lookup("/usr/bin/rm"), Some(Decision::Deny));
+    }
+
+    #[test]
+    fn lookup_relative_path_matches_basename() {
+        let bash = BashConfig {
+            allow: set_of(&["deploy"]),
+            deny: HashSet::new(),
+            ask: HashSet::new(),
+        };
+        assert_eq!(bash.lookup("./scripts/deploy"), Some(Decision::Allow));
     }
 
     #[test]

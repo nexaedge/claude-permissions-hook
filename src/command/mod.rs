@@ -63,12 +63,36 @@ fn visit_pipeline(pipeline: &ast::Pipeline, segments: &mut Vec<CommandSegment>) 
     }
 }
 
+/// Shell builtins and utilities that transparently execute another program.
+/// When these appear as the command name, the actual program being executed
+/// is found in the suffix (arguments).
+const TRANSPARENT_WRAPPERS: &[&str] = &["command", "env", "nohup", "exec", "builtin"];
+
 fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
     match command {
         ast::Command::Simple(simple) => {
             if let Some(word) = &simple.word_or_name {
                 let name = word.flatten();
                 if !name.is_empty() {
+                    let basename = std::path::Path::new(&name)
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or(&name);
+
+                    // If this is a transparent wrapper, extract only the wrapped program(s).
+                    // Wrappers like `command`, `env`, `nohup` are shell mechanisms — the
+                    // permission-relevant program is the one they launch, not the wrapper.
+                    if TRANSPARENT_WRAPPERS.contains(&basename) {
+                        if let Some(suffix) = &simple.suffix {
+                            let unwrapped = extract_wrapped_programs(suffix, basename);
+                            if !unwrapped.is_empty() {
+                                segments.extend(unwrapped);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Not a wrapper (or wrapper with no arguments) — emit as-is
                     segments.push(CommandSegment { program: name });
                 }
             }
@@ -77,6 +101,161 @@ fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
         ast::Command::Function(func) => visit_compound(&func.body.0, segments),
         ast::Command::ExtendedTest(_) => {} // [[ ]] doesn't execute programs
     }
+}
+
+/// Walk suffix arguments to find the actual program(s) behind wrapper commands.
+///
+/// Skips option flags (starting with `-`), env-style assignments (containing `=`),
+/// and option arguments consumed by known flags (e.g., `env -u NAME`, `exec -a NAME`).
+/// Handles nested wrappers: `env command rm` returns only `["rm"]`.
+fn extract_wrapped_programs(
+    suffix: &ast::CommandSuffix,
+    initial_wrapper: &str,
+) -> Vec<CommandSegment> {
+    let mut result = Vec::new();
+    let mut items = suffix.0.iter();
+    let mut current_wrapper = initial_wrapper.to_string();
+
+    loop {
+        let consuming_opts = consuming_options_for(&current_wrapper);
+
+        match find_next_program(&mut items, consuming_opts) {
+            NextProgram::Single(prog) => {
+                let basename = std::path::Path::new(&prog)
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or(&prog);
+                if TRANSPARENT_WRAPPERS.contains(&basename) {
+                    // Another wrapper — update context and continue unwrapping
+                    current_wrapper = basename.to_string();
+                    continue;
+                }
+                // Found the actual target program
+                result.push(CommandSegment { program: prog });
+                break;
+            }
+            NextProgram::FromSplitString(segments) => {
+                // Programs extracted from a -S command string
+                result.extend(segments);
+                break;
+            }
+            NextProgram::None => break,
+        }
+    }
+
+    result
+}
+
+/// Known short/long options that consume a following separate argument for each wrapper.
+///
+/// Only includes options with the `--flag VALUE` form (separate argument).
+/// Options using `--flag=VALUE` form are already handled by the `contains('=')` check.
+///
+/// Note: `-S`/`--split-string` is handled specially in `find_next_program` — its
+/// consumed argument is parsed as a shell command to extract programs.
+fn consuming_options_for(wrapper_basename: &str) -> &'static [&'static str] {
+    match wrapper_basename {
+        "env" => &[
+            "-u",
+            "--unset",
+            "-C",
+            "--chdir",
+            "-S",
+            "--split-string",
+            "-P",
+        ],
+        "exec" => &["-a"],
+        _ => &[],
+    }
+}
+
+/// Options whose consumed argument is a shell command string that should be parsed
+/// to extract the programs being executed (e.g., `env -S "echo hi"`).
+const SPLIT_STRING_OPTIONS: &[&str] = &["-S", "--split-string"];
+
+/// Strip matching outer quotes from a string.
+///
+/// brush-parser stores Word.value as raw text including quotes. For `-S` arguments,
+/// we need the unquoted content to parse as a shell command.
+fn strip_outer_quotes(s: &str) -> String {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+    {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Result of searching for the next program in suffix arguments.
+enum NextProgram {
+    /// A single program name found as a regular word.
+    Single(String),
+    /// Programs extracted from a `-S`/`--split-string` command string.
+    FromSplitString(Vec<CommandSegment>),
+    /// No more programs found.
+    None,
+}
+
+/// Find the next non-option, non-assignment word in the suffix, skipping option flags
+/// and their consumed arguments.
+///
+/// For `-S`/`--split-string` options, the consumed argument is parsed as a shell
+/// command and its programs are returned as `FromSplitString`.
+fn find_next_program<'a>(
+    items: &mut impl Iterator<Item = &'a ast::CommandPrefixOrSuffixItem>,
+    consuming_options: &[&str],
+) -> NextProgram {
+    let mut skip_next = false;
+    let mut parse_next_as_command = false;
+
+    for item in items.by_ref() {
+        if skip_next {
+            skip_next = false;
+
+            if parse_next_as_command {
+                parse_next_as_command = false;
+                // Parse the -S argument as a shell command.
+                // Word.value is raw text including quotes, so strip them first.
+                if let ast::CommandPrefixOrSuffixItem::Word(word) = item {
+                    let raw = word.flatten();
+                    let unquoted = strip_outer_quotes(&raw);
+                    if let Ok(segments) = parse(&unquoted) {
+                        if !segments.is_empty() {
+                            return NextProgram::FromSplitString(segments);
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        if let ast::CommandPrefixOrSuffixItem::Word(word) = item {
+            let text = word.flatten();
+
+            if text.starts_with('-') {
+                if consuming_options.iter().any(|opt| text == *opt) {
+                    skip_next = true;
+                    if SPLIT_STRING_OPTIONS.contains(&text.as_str()) {
+                        parse_next_as_command = true;
+                    }
+                }
+                continue;
+            }
+
+            if text.contains('=') {
+                continue;
+            }
+
+            if !text.is_empty() {
+                return NextProgram::Single(text);
+            }
+        }
+    }
+
+    NextProgram::None
 }
 
 fn visit_compound(command: &ast::CompoundCommand, segments: &mut Vec<CommandSegment>) {
@@ -217,5 +396,119 @@ mod tests {
             programs("case $x in a) rm -rf /;; b) echo ok;; esac"),
             vec!["rm", "echo"]
         );
+    }
+
+    // --- Absolute/relative path extraction ---
+
+    #[test]
+    fn absolute_path_preserves_full_path() {
+        assert_eq!(programs("/bin/rm -rf /"), vec!["/bin/rm"]);
+    }
+
+    #[test]
+    fn relative_path_preserves_full_path() {
+        assert_eq!(programs("./scripts/deploy.sh"), vec!["./scripts/deploy.sh"]);
+    }
+
+    // --- Transparent wrapper unwrapping ---
+
+    #[test]
+    fn command_wrapper_unwraps_to_real_program() {
+        assert_eq!(programs("command rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn command_wrapper_with_option_skips_flags() {
+        assert_eq!(programs("command -p rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn env_wrapper_unwraps_to_real_program() {
+        assert_eq!(programs("env rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn env_wrapper_skips_options_and_assignments() {
+        assert_eq!(programs("env -i FOO=bar rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn nohup_wrapper_unwraps_to_real_program() {
+        assert_eq!(programs("nohup rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn exec_wrapper_unwraps_to_real_program() {
+        assert_eq!(programs("exec rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn builtin_wrapper_unwraps_to_real_program() {
+        assert_eq!(programs("builtin echo hello"), vec!["echo"]);
+    }
+
+    #[test]
+    fn nested_wrappers_fully_unwrapped() {
+        assert_eq!(programs("env command rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn wrapper_with_absolute_path() {
+        assert_eq!(programs("/usr/bin/env rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn wrapper_without_arguments_yields_wrapper_itself() {
+        assert_eq!(programs("env"), vec!["env"]);
+    }
+
+    // --- Wrapper option-argument consumption ---
+
+    #[test]
+    fn env_u_skips_consumed_argument() {
+        assert_eq!(programs("env -u PATH rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn env_unset_long_skips_consumed_argument() {
+        assert_eq!(programs("env --unset PATH rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn env_chdir_skips_consumed_argument() {
+        assert_eq!(programs("env -C /tmp rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn env_multiple_consuming_options() {
+        assert_eq!(
+            programs("env --unset PATH --chdir /tmp rm -rf /"),
+            vec!["rm"]
+        );
+    }
+
+    #[test]
+    fn exec_a_skips_consumed_argument() {
+        assert_eq!(programs("exec -a fake rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn env_p_skips_consumed_argument() {
+        assert_eq!(programs("env -P /usr/bin rm -rf /"), vec!["rm"]);
+    }
+
+    #[test]
+    fn env_split_string_parses_command() {
+        assert_eq!(programs(r#"env -S "echo hi""#), vec!["echo"]);
+    }
+
+    #[test]
+    fn env_split_string_long_form_parses_command() {
+        assert_eq!(programs(r#"env --split-string "rm -rf /""#), vec!["rm"]);
+    }
+
+    #[test]
+    fn env_split_string_with_other_options() {
+        assert_eq!(programs(r#"env -i -u PATH -S "rm -rf /""#), vec!["rm"]);
     }
 }

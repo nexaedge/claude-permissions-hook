@@ -270,6 +270,78 @@ config_decision_test!(edge_multiple_env_prefixes,
     cmd: "A=1 B=2 cargo test", mode: "default",
     config: r#"bash { allow "cargo" }"#, expect: "allow");
 
+// ---- Path normalization: absolute/relative paths match basename in config ----
+
+config_decision_test!(path_absolute_denied,
+    cmd: "/bin/rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(path_usr_bin_denied,
+    cmd: "/usr/bin/rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(path_absolute_allowed,
+    cmd: "/usr/bin/git status", mode: "default",
+    config: MATRIX_CONFIG, expect: "allow");
+
+// ---- Wrapper bypass prevention: wrappers expose the wrapped program ----
+
+config_decision_test!(wrapper_command_rm_denied,
+    cmd: "command rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_env_rm_denied,
+    cmd: "env rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_env_with_opts_rm_denied,
+    cmd: "env -i FOO=bar rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_nohup_rm_denied,
+    cmd: "nohup rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_exec_rm_denied,
+    cmd: "exec rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_nested_env_command_rm_denied,
+    cmd: "env command rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_absolute_path_env_rm_denied,
+    cmd: "/usr/bin/env rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_command_git_allowed,
+    cmd: "command git status", mode: "default",
+    config: MATRIX_CONFIG, expect: "allow");
+
+config_decision_test!(wrapper_env_docker_asks,
+    cmd: "env docker run", mode: "default",
+    config: MATRIX_CONFIG, expect: "ask");
+
+config_decision_test!(wrapper_env_u_rm_denied,
+    cmd: "env -u PATH rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_exec_a_rm_denied,
+    cmd: "exec -a fake rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_env_unset_chdir_rm_denied,
+    cmd: "env --unset PATH --chdir /tmp rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_env_p_rm_denied,
+    cmd: "env -P /usr/bin rm -rf /", mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
+config_decision_test!(wrapper_env_split_string_rm_denied,
+    cmd: r#"env -S "rm -rf /""#, mode: "default",
+    config: MATRIX_CONFIG, expect: "deny");
+
 // Bash tool_input without command field
 #[test]
 fn edge_bash_no_command_field() {

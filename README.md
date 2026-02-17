@@ -40,10 +40,24 @@ Unlisted programs (not in any config list) return no opinion — Claude handles 
 
 ## Configuration
 
-Pass a KDL config file via `--config`:
+The hook discovers your config automatically in this order:
+
+1. `--config /path/to/config.kdl` (explicit CLI argument)
+2. `$CLAUDE_PERMISSIONS_HOOK_CONFIG` environment variable
+3. `~/.config/claude-permissions-hook/config.kdl` (XDG default)
+
+If no config is found, the hook returns `ask` for everything — prompting you to set one up.
 
 ```bash
+# Explicit path
 claude-permissions-hook hook --config ~/.config/claude-permissions.kdl
+
+# Or set the environment variable
+export CLAUDE_PERMISSIONS_HOOK_CONFIG=~/.config/claude-permissions.kdl
+
+# Or place it in the default location
+mkdir -p ~/.config/claude-permissions-hook
+cp example-config.kdl ~/.config/claude-permissions-hook/config.kdl
 ```
 
 ### Config Format (KDL)
@@ -67,7 +81,7 @@ Lookup precedence: deny > ask > allow.
 
 For chained commands (`&&`, `||`, `;`, `|`), the hook evaluates each program and takes the most restrictive decision. If any program is denied, the whole command is denied.
 
-Without `--config`, the hook returns `ask` for everything, prompting you to set up a config file.
+Without a config (no `--config`, no env var, no default file), the hook returns `ask` for everything, prompting you to set up a config file.
 
 ## Development
 
