@@ -30,6 +30,28 @@ pub enum ConfigError {
     ParseError(String),
 }
 
+/// KDL document paired with its source text for error location reporting.
+///
+/// KDL nodes carry byte-offset spans from parsing. This wrapper preserves the
+/// original source so we can convert those offsets to 1-based line numbers in
+/// error messages without threading the source string through every function.
+struct KdlParse<'a> {
+    doc: &'a kdl::KdlDocument,
+    source: &'a str,
+}
+
+impl KdlParse<'_> {
+    /// Return the 1-based line number of a KDL node in the original source.
+    fn line_of(&self, node: &kdl::KdlNode) -> usize {
+        let offset = node.span().offset();
+        self.source[..offset.min(self.source.len())]
+            .bytes()
+            .filter(|&b| b == b'\n')
+            .count()
+            + 1
+    }
+}
+
 impl Config {
     /// Load a config from a KDL file at the given path.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
@@ -48,12 +70,22 @@ impl Config {
         let doc: kdl::KdlDocument = content
             .parse()
             .map_err(|e: kdl::KdlError| ConfigError::ParseError(e.to_string()))?;
-        Self::from_document(&doc)
+        let kdl = KdlParse {
+            doc: &doc,
+            source: content,
+        };
+        Self::from_document(&kdl)
     }
 
-    fn from_document(doc: &kdl::KdlDocument) -> Result<Self, ConfigError> {
-        let bash = match doc.get("bash").and_then(|n| n.children()) {
-            Some(children) => BashConfig::from_children(children)?,
+    fn from_document(kdl: &KdlParse) -> Result<Self, ConfigError> {
+        let bash = match kdl.doc.get("bash").and_then(|n| n.children()) {
+            Some(children) => {
+                let child_kdl = KdlParse {
+                    doc: children,
+                    source: kdl.source,
+                };
+                BashConfig::from_children(&child_kdl)?
+            }
             None => BashConfig::default(),
         };
         Ok(Config { bash })
@@ -61,11 +93,11 @@ impl Config {
 }
 
 impl BashConfig {
-    fn from_children(children: &kdl::KdlDocument) -> Result<Self, ConfigError> {
+    fn from_children(kdl: &KdlParse) -> Result<Self, ConfigError> {
         Ok(BashConfig {
-            allow: collect_rules(children, "allow")?,
-            deny: collect_rules(children, "deny")?,
-            ask: collect_rules(children, "ask")?,
+            allow: collect_rules(kdl, "allow")?,
+            deny: collect_rules(kdl, "deny")?,
+            ask: collect_rules(kdl, "ask")?,
         })
     }
 
@@ -98,11 +130,12 @@ impl BashConfig {
 /// Handles both simple program entries (`deny "rm"`) and inline argument rules
 /// (`deny "rm -rf /"`), plus optional children blocks for extended conditions.
 fn collect_rules(
-    doc: &kdl::KdlDocument,
+    kdl: &KdlParse,
     node_name: &str,
 ) -> Result<Vec<rule::BashRule>, ConfigError> {
     let mut rules = Vec::new();
-    for node in doc.nodes().iter().filter(|n| n.name().value() == node_name) {
+    for node in kdl.doc.nodes().iter().filter(|n| n.name().value() == node_name) {
+        let line = kdl.line_of(node);
         let string_entries: Vec<&str> = node
             .entries()
             .iter()
@@ -113,27 +146,36 @@ fn collect_rules(
         // Reject children block without any string entry (fail-closed)
         if has_children && string_entries.is_empty() {
             return Err(ConfigError::ParseError(format!(
-                "{node_name} node has a children block but no program entry: {node}"
+                "line {line}: {node_name} node has a children block but no program entry"
             )));
         }
 
         // Reject multiple entries combined with children (ambiguous semantics)
         if has_children && string_entries.len() > 1 {
             return Err(ConfigError::ParseError(format!(
-                "{node_name} node has a children block with multiple entries \
-                 (use separate nodes instead): {node}"
+                "line {line}: {node_name} node has a children block with multiple entries; \
+                 use separate nodes instead"
             )));
         }
 
+        let at_line = |e: ConfigError| -> ConfigError {
+            match e {
+                ConfigError::ParseError(msg) => {
+                    ConfigError::ParseError(format!("line {line}: {msg}"))
+                }
+                other => other,
+            }
+        };
+
         for value in &string_entries {
-            let bash_rule = parse_rule_entry(value)?;
+            let bash_rule = parse_rule_entry(value).map_err(at_line)?;
             rules.push(bash_rule);
         }
 
         // Children extend the single entry when present.
         if let Some(children) = node.children() {
             if let Some(last_rule) = rules.last_mut() {
-                parse_children_block(children, &mut last_rule.conditions)?;
+                parse_children_block(children, &mut last_rule.conditions).map_err(at_line)?;
             }
         }
     }
@@ -505,9 +547,17 @@ mod tests {
     // --- collect_rules: inline rule parsing ---
 
     /// Helper to parse KDL and collect rules from a specific node name.
-    fn rules_from_kdl(kdl: &str, node_name: &str) -> Vec<rule::BashRule> {
-        let doc: kdl::KdlDocument = kdl.parse().unwrap();
-        collect_rules(&doc, node_name).unwrap()
+    fn rules_from_kdl(source: &str, node_name: &str) -> Vec<rule::BashRule> {
+        let doc: kdl::KdlDocument = source.parse().unwrap();
+        let kdl = KdlParse { doc: &doc, source };
+        collect_rules(&kdl, node_name).unwrap()
+    }
+
+    /// Helper to parse KDL, collect rules, and return the error.
+    fn rules_err(source: &str, node_name: &str) -> String {
+        let doc: kdl::KdlDocument = source.parse().unwrap();
+        let kdl = KdlParse { doc: &doc, source };
+        collect_rules(&kdl, node_name).unwrap_err().to_string()
     }
 
     #[test]
@@ -680,32 +730,30 @@ mod tests {
 
     #[test]
     fn rule_invalid_inline_rule_returns_error() {
-        let doc: kdl::KdlDocument = r#"deny "git &&""#.parse().unwrap();
-        let result = collect_rules(&doc, "deny");
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigError::ParseError(_)));
+        let err = rules_err(r#"deny "git &&""#, "deny");
+        assert!(err.contains("line 1"), "should include line number, got: {err}");
     }
 
     #[test]
     fn rule_invalid_glob_returns_error() {
-        let doc: kdl::KdlDocument = r#"deny "rm" {
+        let err = rules_err(
+            r#"deny "rm" {
             positionals "[invalid"
-        }"#
-        .parse()
-        .unwrap();
-        let result = collect_rules(&doc, "deny");
-        assert!(result.is_err());
+        }"#,
+            "deny",
+        );
+        assert!(err.contains("line 1"), "should include line number, got: {err}");
     }
 
     #[test]
     fn rule_invalid_required_arguments_format() {
-        let doc: kdl::KdlDocument = r#"deny "curl" {
+        let err = rules_err(
+            r#"deny "curl" {
             required-arguments "--upload-file"
-        }"#
-        .parse()
-        .unwrap();
-        let result = collect_rules(&doc, "deny");
-        assert!(result.is_err());
+        }"#,
+            "deny",
+        );
+        assert!(err.contains("line 1"), "should include line number, got: {err}");
     }
 
     #[test]
@@ -745,42 +793,43 @@ mod tests {
 
     #[test]
     fn error_multi_segment_inline_rule() {
-        // "git status && rm -rf /" contains operators → multiple segments → error
-        let doc: kdl::KdlDocument = r#"deny "git status && rm -rf /""#.parse().unwrap();
-        let result = collect_rules(&doc, "deny");
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let err = rules_err(r#"deny "git status && rm -rf /""#, "deny");
         assert!(err.contains("multiple commands"), "got: {err}");
+        assert!(err.contains("line 1"), "should include line number, got: {err}");
     }
 
     #[test]
     fn error_children_without_entry() {
-        // deny { required-flags "r" } → no program entry → error
-        let doc: kdl::KdlDocument = r#"deny {
+        let err = rules_err(
+            r#"deny {
             required-flags "r"
-        }"#
-        .parse()
-        .unwrap();
-        let result = collect_rules(&doc, "deny");
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        }"#,
+            "deny",
+        );
         assert!(err.contains("no program entry"), "got: {err}");
-        assert!(err.contains("required-flags"), "should include node text, got: {err}");
+        assert!(err.contains("line 1"), "should include line number, got: {err}");
     }
 
     #[test]
     fn error_multi_entry_with_children() {
-        // deny "rm" "mv" { required-flags "f" } → ambiguous → error
-        let doc: kdl::KdlDocument = r#"deny "rm" "mv" {
+        let err = rules_err(
+            r#"deny "rm" "mv" {
             required-flags "f"
-        }"#
-        .parse()
-        .unwrap();
-        let result = collect_rules(&doc, "deny");
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        }"#,
+            "deny",
+        );
         assert!(err.contains("multiple entries"), "got: {err}");
-        assert!(err.contains(r#""rm""#), "should include node text, got: {err}");
+        assert!(err.contains("line 1"), "should include line number, got: {err}");
+    }
+
+    #[test]
+    fn error_includes_correct_line_number() {
+        // Node on line 3 should report line 3
+        let err = rules_err(
+            "allow \"git\"\nallow \"cargo\"\ndeny {\n    required-flags \"r\"\n}",
+            "deny",
+        );
+        assert!(err.contains("line 3"), "should report line 3, got: {err}");
     }
 
     #[test]
