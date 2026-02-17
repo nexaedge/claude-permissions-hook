@@ -150,8 +150,8 @@ fn parse_rule_entry(value: &str) -> Result<rule::BashRule, ConfigError> {
         return Err(ConfigError::ParseError("empty rule string".to_string()));
     }
 
-    // Simple program name: no spaces → empty conditions
-    if !trimmed.contains(' ') {
+    // Simple program name: no whitespace → empty conditions
+    if trimmed.split_whitespace().nth(1).is_none() {
         return Ok(rule::BashRule {
             program: trimmed.to_string(),
             conditions: rule::RuleConditions::default(),
@@ -731,6 +731,16 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ConfigError::ParseError(_)));
+    }
+
+    #[test]
+    fn rule_inline_with_tab_whitespace_parses_args() {
+        // Tab-separated tokens should still be parsed as args, not treated as
+        // a single program name.
+        let rules = rules_from_kdl("deny \"rm\t-rf\"", "deny");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].program, "rm");
+        assert_eq!(rules[0].conditions.required_flags, set_of(&["-r", "-f"]));
     }
 
     #[test]
