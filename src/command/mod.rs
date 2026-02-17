@@ -112,9 +112,10 @@ fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
                     }
 
                     // Not a wrapper (or wrapper with no arguments) — emit as-is
+                    let args = extract_args_from_suffix(&simple.suffix);
                     segments.push(CommandSegment {
                         program: name,
-                        args: vec![],
+                        args,
                     });
                 }
             }
@@ -123,6 +124,26 @@ fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
         ast::Command::Function(func) => visit_compound(&func.body.0, segments),
         ast::Command::ExtendedTest(_) => {} // [[ ]] doesn't execute programs
     }
+}
+
+/// Extract arguments from a command suffix, applying flag expansion.
+///
+/// Iterates suffix items, skips I/O redirections, assignment words, and process
+/// substitutions. For each `Word` item, flattens it to a string and applies
+/// `expand_flags()` to normalize combined short flags.
+fn extract_args_from_suffix(suffix: &Option<ast::CommandSuffix>) -> Vec<String> {
+    let Some(suffix) = suffix else {
+        return vec![];
+    };
+    let mut args = Vec::new();
+    for item in &suffix.0 {
+        if let ast::CommandPrefixOrSuffixItem::Word(word) = item {
+            let text = word.flatten();
+            args.extend(expand_flags(&text));
+        }
+        // IoRedirect, AssignmentWord, ProcessSubstitution — skip
+    }
+    args
 }
 
 /// Walk suffix arguments to find the actual program(s) behind wrapper commands.
@@ -535,6 +556,57 @@ mod tests {
     #[test]
     fn env_split_string_with_other_options() {
         assert_eq!(programs(r#"env -i -u PATH -S "rm -rf /""#), vec!["rm"]);
+    }
+
+    // --- Arg extraction ---
+
+    fn parse_segments(input: &str) -> Vec<CommandSegment> {
+        parse(input).expect("parse should succeed")
+    }
+
+    #[test]
+    fn args_simple_subcommand() {
+        let segs = parse_segments("git status");
+        assert_eq!(segs[0].program, "git");
+        assert_eq!(segs[0].args, vec!["status"]);
+    }
+
+    #[test]
+    fn args_flag_expansion() {
+        let segs = parse_segments("rm -rf /");
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    #[test]
+    fn args_long_flag_and_positionals() {
+        let segs = parse_segments("git push --force origin main");
+        assert_eq!(segs[0].program, "git");
+        assert_eq!(segs[0].args, vec!["push", "--force", "origin", "main"]);
+    }
+
+    #[test]
+    fn args_pipe_each_segment_has_own_args() {
+        let segs = parse_segments("ls -la | grep foo");
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].program, "ls");
+        assert_eq!(segs[0].args, vec!["-l", "-a"]);
+        assert_eq!(segs[1].program, "grep");
+        assert_eq!(segs[1].args, vec!["foo"]);
+    }
+
+    #[test]
+    fn args_env_var_excluded() {
+        let segs = parse_segments("ENV=val git status");
+        assert_eq!(segs[0].program, "git");
+        assert_eq!(segs[0].args, vec!["status"]);
+    }
+
+    #[test]
+    fn args_redirection_excluded() {
+        let segs = parse_segments("git log > file");
+        assert_eq!(segs[0].program, "git");
+        assert_eq!(segs[0].args, vec!["log"]);
     }
 
     // --- Flag expansion ---
