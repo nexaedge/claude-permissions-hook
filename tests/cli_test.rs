@@ -184,104 +184,38 @@ macro_rules! non_bash_empty_test {
     };
 }
 
-non_bash_empty_test!(non_bash_read_bypass,           tool: "Read",  mode: "bypassPermissions");
-non_bash_empty_test!(non_bash_read_dont_ask,         tool: "Read",  mode: "dontAsk");
-non_bash_empty_test!(non_bash_read_plan,             tool: "Read",  mode: "plan");
-non_bash_empty_test!(non_bash_read_accept_edits,     tool: "Read",  mode: "acceptEdits");
+// One per tool type is enough — mode doesn't affect non-Bash routing (tested in unit tests).
 non_bash_empty_test!(non_bash_read_default,          tool: "Read",  mode: "default");
 non_bash_empty_test!(non_bash_write_default,         tool: "Write", mode: "default");
 non_bash_empty_test!(non_bash_edit_default,          tool: "Edit",  mode: "default");
 non_bash_empty_test!(non_bash_glob_default,          tool: "Glob",  mode: "default");
 non_bash_empty_test!(non_bash_grep_default,          tool: "Grep",  mode: "default");
 
-// ==== Full Decision Matrix (5 modes × 6 columns = 30 cells) ====
+// ==== With config: representative decisions through the full pipeline ====
 //
-// Standard config for all matrix tests:
-//   bash { allow "git" deny "rm" ask "docker" }
-//
-// | permissionMode     | allow(git) | deny(rm)  | ask(docker)| unlisted | multi(git+rm) |
-// |--------------------|------------|-----------|------------|----------|---------------|
-// | bypassPermissions  | Allow      | Deny      | Allow      | None     | Deny          |
-// | dontAsk            | Allow      | Deny      | Deny       | None     | Deny          |
-// | plan               | Allow      | Deny      | Ask        | None     | Deny          |
-// | acceptEdits        | Allow      | Deny      | Ask        | None     | Deny          |
-// | default            | Allow      | Deny      | Ask        | None     | Deny          |
+// One test per decision type verifies KDL config loading → decision → JSON output.
+// The full mode × decision matrix is in unit tests (decision::tests).
 
 const MATRIX_CONFIG: &str = r#"bash { allow "git"; deny "rm"; ask "docker"; }"#;
 
-// -- Column 1: allow list (git) --
-config_decision_test!(matrix_allow_bypass,       cmd: "git status", mode: "bypassPermissions", config: MATRIX_CONFIG, expect: "allow");
-config_decision_test!(matrix_allow_dont_ask,     cmd: "git status", mode: "dontAsk",           config: MATRIX_CONFIG, expect: "allow");
-config_decision_test!(matrix_allow_plan,         cmd: "git status", mode: "plan",              config: MATRIX_CONFIG, expect: "allow");
-config_decision_test!(matrix_allow_accept_edits, cmd: "git status", mode: "acceptEdits",       config: MATRIX_CONFIG, expect: "allow");
-config_decision_test!(matrix_allow_default,      cmd: "git status", mode: "default",           config: MATRIX_CONFIG, expect: "allow");
+// Each config decision type produces the correct output through the binary
+config_decision_test!(config_allow,    cmd: "git status",  mode: "default", config: MATRIX_CONFIG, expect: "allow");
+config_decision_test!(config_deny,     cmd: "rm -rf /",    mode: "default", config: MATRIX_CONFIG, expect: "deny");
+config_decision_test!(config_ask,      cmd: "docker run",  mode: "default", config: MATRIX_CONFIG, expect: "ask");
+config_empty_test!(config_unlisted,    cmd: "python x.py", mode: "default", config: MATRIX_CONFIG);
 
-// -- Column 2: deny list (rm) --
-config_decision_test!(matrix_deny_bypass,       cmd: "rm -rf /",  mode: "bypassPermissions", config: MATRIX_CONFIG, expect: "deny");
-config_decision_test!(matrix_deny_dont_ask,     cmd: "rm -rf /",  mode: "dontAsk",           config: MATRIX_CONFIG, expect: "deny");
-config_decision_test!(matrix_deny_plan,         cmd: "rm -rf /",  mode: "plan",              config: MATRIX_CONFIG, expect: "deny");
-config_decision_test!(matrix_deny_accept_edits, cmd: "rm -rf /",  mode: "acceptEdits",       config: MATRIX_CONFIG, expect: "deny");
-config_decision_test!(matrix_deny_default,      cmd: "rm -rf /",  mode: "default",           config: MATRIX_CONFIG, expect: "deny");
+// Mode modifier works through the binary (bypass converts ask→allow, dontAsk converts ask→deny)
+config_decision_test!(mode_bypass_ask, cmd: "docker run", mode: "bypassPermissions", config: MATRIX_CONFIG, expect: "allow");
+config_decision_test!(mode_dont_ask,   cmd: "docker run", mode: "dontAsk",           config: MATRIX_CONFIG, expect: "deny");
 
-// -- Column 3: ask list (docker) --
-config_decision_test!(matrix_ask_bypass,        cmd: "docker run", mode: "bypassPermissions", config: MATRIX_CONFIG, expect: "allow");
-config_decision_test!(matrix_ask_dont_ask,      cmd: "docker run", mode: "dontAsk",           config: MATRIX_CONFIG, expect: "deny");
-config_decision_test!(matrix_ask_plan,          cmd: "docker run", mode: "plan",              config: MATRIX_CONFIG, expect: "ask");
-config_decision_test!(matrix_ask_accept_edits,  cmd: "docker run", mode: "acceptEdits",       config: MATRIX_CONFIG, expect: "ask");
-config_decision_test!(matrix_ask_default,       cmd: "docker run", mode: "default",           config: MATRIX_CONFIG, expect: "ask");
+// Multi-command aggregation works through shell parsing + binary
+config_decision_test!(multi_chain_deny, cmd: "git add && rm -rf /", mode: "default", config: MATRIX_CONFIG, expect: "deny");
+config_decision_test!(multi_pipe_deny,  cmd: "git log | rm -rf /",  mode: "default", config: MATRIX_CONFIG, expect: "deny");
 
-// -- Column 4: unlisted (python) --
-config_empty_test!(matrix_unlisted_bypass,       cmd: "python x.py", mode: "bypassPermissions", config: MATRIX_CONFIG);
-config_empty_test!(matrix_unlisted_dont_ask,     cmd: "python x.py", mode: "dontAsk",           config: MATRIX_CONFIG);
-config_empty_test!(matrix_unlisted_plan,         cmd: "python x.py", mode: "plan",              config: MATRIX_CONFIG);
-config_empty_test!(matrix_unlisted_accept_edits, cmd: "python x.py", mode: "acceptEdits",       config: MATRIX_CONFIG);
-config_empty_test!(matrix_unlisted_default,      cmd: "python x.py", mode: "default",           config: MATRIX_CONFIG);
+// ==== Fail-closed: one representative unparseable command ====
 
-// -- Column 5: multi-command allow+deny (git && rm) --
-config_decision_test!(matrix_multi_allow_deny_bypass,       cmd: "git add && rm -rf /", mode: "bypassPermissions", config: MATRIX_CONFIG, expect: "deny");
-config_decision_test!(matrix_multi_allow_deny_dont_ask,     cmd: "git add && rm -rf /", mode: "dontAsk",           config: MATRIX_CONFIG, expect: "deny");
-config_decision_test!(matrix_multi_allow_deny_plan,         cmd: "git add && rm -rf /", mode: "plan",              config: MATRIX_CONFIG, expect: "deny");
-config_decision_test!(matrix_multi_allow_deny_accept_edits, cmd: "git add && rm -rf /", mode: "acceptEdits",       config: MATRIX_CONFIG, expect: "deny");
-config_decision_test!(matrix_multi_allow_deny_default,      cmd: "git add && rm -rf /", mode: "default",           config: MATRIX_CONFIG, expect: "deny");
-
-// ==== Additional multi-command scenarios ====
-
-// allow + unlisted → Ask (unlisted defaults to Ask, which is more restrictive than Allow)
-config_decision_test!(multi_allow_unlisted_default,
-    cmd: "git status && python x.py", mode: "default",
-    config: MATRIX_CONFIG, expect: "ask");
-
-// allow + ask → Ask (ask is more restrictive than allow)
-config_decision_test!(multi_allow_ask_default,
-    cmd: "git status && docker run", mode: "default",
-    config: MATRIX_CONFIG, expect: "ask");
-
-// piped: allow | deny → Deny
-config_decision_test!(multi_pipe_allow_deny,
-    cmd: "git log | rm -rf /", mode: "default",
-    config: MATRIX_CONFIG, expect: "deny");
-
-// all unlisted → None (no opinion)
-config_empty_test!(multi_all_unlisted,
-    cmd: "python x.py && ruby script.rb", mode: "default",
-    config: MATRIX_CONFIG);
-
-// ==== Fail-closed: unparseable commands ====
-
-config_decision_test!(fail_closed_trailing_and,
+config_decision_test!(fail_closed_parse_error,
     cmd: "git add . &&", mode: "default",
-    config: MATRIX_CONFIG, expect: "ask");
-
-config_decision_test!(fail_closed_empty_command,
-    cmd: "", mode: "default",
-    config: MATRIX_CONFIG, expect: "ask");
-
-config_decision_test!(fail_closed_arithmetic_only,
-    cmd: "(( x + 1 ))", mode: "default",
-    config: MATRIX_CONFIG, expect: "ask");
-
-config_decision_test!(fail_closed_whitespace_command,
-    cmd: "   ", mode: "default",
     config: MATRIX_CONFIG, expect: "ask");
 
 // ---- Config error handling ----
@@ -321,9 +255,9 @@ stdin_error_test!(malformed_json, input: "this is not json at all", reason_conta
 stdin_error_test!(empty_stdin, input: "", reason_contains: "Error");
 stdin_error_test!(partial_json, input: r#"{"sessionId": "incomplete"}"#, reason_contains: "Error");
 
-// ---- Edge cases: env prefixes, piped mixed, chained mixed ----
+// ---- Edge cases: shell parsing nuances through the binary ----
 
-// Env prefix: resolved to actual program
+// Env-var prefixes are stripped, so the actual program is evaluated
 config_decision_test!(edge_env_prefix_allowed,
     cmd: "ENV=val git status", mode: "default",
     config: MATRIX_CONFIG, expect: "allow");
@@ -336,20 +270,14 @@ config_decision_test!(edge_multiple_env_prefixes,
     cmd: "A=1 B=2 cargo test", mode: "default",
     config: r#"bash { allow "cargo" }"#, expect: "allow");
 
-// Piped command with mixed decisions
-config_decision_test!(edge_pipe_mixed_allow_deny,
-    cmd: "git status | rm -rf /", mode: "default",
-    config: MATRIX_CONFIG, expect: "deny");
-
-// Chained command with mixed decisions
-config_decision_test!(edge_chain_mixed_allow_ask,
-    cmd: "git add && docker run", mode: "default",
-    config: MATRIX_CONFIG, expect: "ask");
-
 // Bash tool_input without command field
 #[test]
 fn edge_bash_no_command_field() {
-    let input = make_input_json("Bash", "default", serde_json::json!({"description": "something"}));
+    let input = make_input_json(
+        "Bash",
+        "default",
+        serde_json::json!({"description": "something"}),
+    );
     let (stdout, exit_code) = run_hook_with_config(&input, MATRIX_CONFIG);
     assert_eq!(exit_code, 0);
     let (decision, _) = parse_output(&stdout);

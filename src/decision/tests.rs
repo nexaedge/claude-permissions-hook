@@ -350,6 +350,27 @@ fn reason_dont_ask_converts_ask_to_deny() {
     let input = bash_input("docker run", "dontAsk");
     assert_eq!(
         reason_of(&input, &config),
-        "claude-permissions-hook: 'docker' is in your deny list"
+        "claude-permissions-hook: 'docker' denied by dontAsk mode"
+    );
+}
+
+#[test]
+fn reason_dont_ask_multi_converts_ask_to_deny() {
+    let config = make_config(&["git"], &[], &["docker"]);
+    let input = bash_input("git pull && docker run", "dontAsk");
+    assert_eq!(
+        reason_of(&input, &config),
+        "claude-permissions-hook: 'docker' denied by dontAsk mode (in: git, docker)"
+    );
+}
+
+#[test]
+fn reason_explicit_deny_not_affected_by_mode_text() {
+    // An explicit deny in dontAsk mode should still say "deny list", not "dontAsk mode"
+    let config = make_config(&[], &["rm"], &[]);
+    let input = bash_input("rm -rf /", "dontAsk");
+    assert_eq!(
+        reason_of(&input, &config),
+        "claude-permissions-hook: 'rm' is in your deny list"
     );
 }

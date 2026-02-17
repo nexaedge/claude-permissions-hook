@@ -97,7 +97,17 @@ fn build_reason(
         }
         Decision::Deny => {
             let trigger = find_trigger(programs, per_program, pre_modifier);
-            if is_single {
+            let mode_converted = *pre_modifier != Decision::Deny;
+            if mode_converted {
+                if is_single {
+                    format!("{APP_NAME}: '{trigger}' denied by dontAsk mode")
+                } else {
+                    format!(
+                        "{APP_NAME}: '{trigger}' denied by dontAsk mode (in: {})",
+                        programs.join(", ")
+                    )
+                }
+            } else if is_single {
                 format!("{APP_NAME}: '{trigger}' is in your deny list")
             } else {
                 format!(

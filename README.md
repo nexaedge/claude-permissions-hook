@@ -22,7 +22,7 @@ The hook runs automatically as a Claude Code PreToolUse hook. It reads tool call
 
 ```bash
 # Test the hook manually
-echo '{"sessionId":"s","transcriptPath":"/tmp/t","cwd":"/tmp","permissionMode":"default","hookEventName":"PreToolUse","toolName":"Bash","toolInput":{"command":"git status"},"toolUseId":"t"}' | claude-permissions-hook hook --config my-config.kdl
+echo '{"session_id":"s","transcript_path":"/tmp/t","cwd":"/tmp","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"},"tool_use_id":"t"}' | claude-permissions-hook hook --config my-config.kdl
 ```
 
 ### Permission Modes
