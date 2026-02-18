@@ -1007,12 +1007,13 @@ mod tests {
         assert!(r.matches(&seg("git", &[])));
     }
 
-    // --- Group 14: Rule String Subcommand + Children Subcommands (Both Set → AND) ---
+    // --- Group 14: Subcommand + Subcommands Both Set (Matching-Level AND) ---
     //
-    // When both `subcommand` (from inline rule string) and `subcommands` (from children block)
-    // are set, both conditions must pass (AND). Both operate on the same positional arg list.
-    // In practice this combination is unusual — the spec calls it "confusing". These tests
-    // verify the AND semantics at the matching level. See mod.rs for e2e parser tests.
+    // The parser normalizes inline+children by prepending `subcommand` to `subcommands`
+    // chains and clearing `subcommand`. These tests verify the raw matching-level AND
+    // behavior when both fields are manually set — a scenario that no longer arises from
+    // normal parsing, but validates that the matcher handles it correctly. See mod.rs
+    // for e2e parser normalization tests.
 
     #[test]
     fn match_inline_subcommand_and_children_subcommands_both_pass() {

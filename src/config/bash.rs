@@ -69,6 +69,11 @@ pub(super) fn parse_rules(entries: Vec<RuleEntry>) -> Result<Vec<rule::BashRule>
         if let Some(children) = &entry.children {
             if let Some(last_rule) = rules.last_mut() {
                 parse_children(children, &mut last_rule.conditions)?;
+                // When both inline subcommand and children subcommands exist,
+                // children chains are relative to the inline subcommand position.
+                // Prepend the inline subcommand to each chain, then clear it.
+                // e.g., "git push" { subcommands "origin" } → chains [["push","origin"]]
+                normalize_subcommand_chains(&mut last_rule.conditions);
             }
         }
     }
@@ -122,6 +127,23 @@ fn parse_rule_entry(value: &str) -> Result<rule::BashRule, ConfigError> {
         program: segment.program,
         conditions,
     })
+}
+
+/// When a rule has both an inline subcommand (from rule string) and children
+/// `subcommands` chains, the children are relative to the inline position.
+///
+/// Prepend the inline subcommand to each children chain, then clear `subcommand`.
+/// Example: `"git push" { subcommands "origin" }` → `subcommands [["push","origin"]]`.
+fn normalize_subcommand_chains(conditions: &mut rule::RuleConditions) {
+    if conditions.subcommand.is_empty() || conditions.subcommands.is_empty() {
+        return;
+    }
+    for chain in &mut conditions.subcommands {
+        let mut merged = conditions.subcommand.clone();
+        merged.append(chain);
+        *chain = merged;
+    }
+    conditions.subcommand.clear();
 }
 
 /// Parse children nodes to extend rule conditions.
