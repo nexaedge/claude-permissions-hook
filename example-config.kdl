@@ -26,3 +26,26 @@ bash {
     ask "pip" "gem" "composer"
     ask "chmod" "chown" "chgrp" "sudo"
 }
+
+files {
+    // Sensitive files — never let Claude read or modify
+    deny "~/.ssh/**" "read" "write" "edit"
+    deny "~/.env" "read" "write" "edit"
+    deny "~/.aws/**" "read" "write" "edit"
+    deny "**/.env" "read" "write" "edit"
+    deny "**/.env.*" "read" "write" "edit"
+
+    // Project directory — full access for all file tools
+    "<cwd>/**" {
+        allow "read" "write" "edit" "glob" "grep"
+    }
+
+    // Home directory — read and search ok, but ask before writing
+    "<home>/**" {
+        allow "read" "glob" "grep"
+        ask "write" "edit"
+    }
+
+    // Anywhere else — ask before writing or editing
+    ask "/**" "write" "edit"
+}
