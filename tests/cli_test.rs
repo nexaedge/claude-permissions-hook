@@ -587,3 +587,271 @@ fn error_output_still_has_correct_structure() {
     assert_eq!(specific["hookEventName"], "PreToolUse");
     assert_eq!(specific["permissionDecision"], "ask");
 }
+
+// ==== File tool integration tests (step-05: spec-005) ====
+//
+// All tests use the shared config fixture: tests/fixtures/file-tools.kdl
+// CWD in test inputs is "/tmp/test" (from make_input_json).
+// <cwd>/** expands to /tmp/test/** at evaluation time.
+// ~ expands to $HOME at evaluation time.
+
+fn file_tools_config() -> String {
+    load_fixture("file-tools.kdl")
+}
+
+/// File tool test: loads file-tools config, sends a tool request, asserts decision.
+macro_rules! ft_test {
+    ($name:ident, tool: $tool:expr, input: $input:expr, expect: $expected:expr) => {
+        #[test]
+        fn $name() {
+            let (stdout, exit_code) =
+                run_hook_with_config(&make_input_json($tool, "default", $input), &file_tools_config());
+            assert_eq!(exit_code, 0);
+            let (decision, _) = parse_output(&stdout);
+            assert_eq!(
+                decision, $expected,
+                "tool={}, expected {}, got {}",
+                $tool, $expected, decision
+            );
+        }
+    };
+}
+
+/// File tool test with permission mode override.
+macro_rules! ft_test_mode {
+    ($name:ident, tool: $tool:expr, input: $input:expr, mode: $mode:expr, expect: $expected:expr) => {
+        #[test]
+        fn $name() {
+            let (stdout, exit_code) =
+                run_hook_with_config(&make_input_json($tool, $mode, $input), &file_tools_config());
+            assert_eq!(exit_code, 0);
+            let (decision, _) = parse_output(&stdout);
+            assert_eq!(
+                decision, $expected,
+                "tool={}, mode={}, expected {}, got {}",
+                $tool, $mode, $expected, decision
+            );
+        }
+    };
+}
+
+/// File tool test: expects empty JSON (no opinion / no matching rule).
+macro_rules! ft_test_empty {
+    ($name:ident, tool: $tool:expr, input: $input:expr) => {
+        #[test]
+        fn $name() {
+            let (stdout, exit_code) =
+                run_hook_with_config(&make_input_json($tool, "default", $input), &file_tools_config());
+            assert_eq!(exit_code, 0);
+            assert_empty_json(&stdout);
+        }
+    };
+}
+
+// ---- Per-tool basic decisions ----
+
+ft_test!(ft_read_cwd_allow,
+    tool: "Read",
+    input: serde_json::json!({"file_path": "/tmp/test/src/main.rs"}),
+    expect: "allow");
+
+ft_test!(ft_read_ssh_deny,
+    tool: "Read",
+    input: serde_json::json!({"file_path": "~/.ssh/id_rsa"}),
+    expect: "deny");
+
+// Write in CWD gets "ask" because ask tier (ask "/**" "write") fires before allow tier.
+// This tests tier ordering: deny → ask → allow.
+ft_test!(ft_write_cwd_ask_tier_ordering,
+    tool: "Write",
+    input: serde_json::json!({"file_path": "/tmp/test/new-file.rs", "content": "data"}),
+    expect: "ask");
+
+ft_test!(ft_write_env_deny,
+    tool: "Write",
+    input: serde_json::json!({"file_path": "~/.env", "content": "SECRET=x"}),
+    expect: "deny");
+
+ft_test!(ft_write_etc_passwd_ask,
+    tool: "Write",
+    input: serde_json::json!({"file_path": "/etc/passwd", "content": "data"}),
+    expect: "ask");
+
+// Edit in CWD gets "ask" because ask tier (ask "/**" "edit") fires before allow tier.
+ft_test!(ft_edit_cwd_ask_tier_ordering,
+    tool: "Edit",
+    input: serde_json::json!({"file_path": "/tmp/test/src/lib.rs", "old_string": "a", "new_string": "b"}),
+    expect: "ask");
+
+ft_test!(ft_edit_outside_ask,
+    tool: "Edit",
+    input: serde_json::json!({"file_path": "/root/.bashrc", "old_string": "a", "new_string": "b"}),
+    expect: "ask");
+
+// Write/Edit allow verified with config that has no conflicting ask tier
+#[test]
+fn ft_write_cwd_allow() {
+    let config = r#"
+        files {
+            deny "~/.ssh/**" "write"
+            "<cwd>/**" { allow "write" }
+        }
+    "#;
+    let input = make_input_json(
+        "Write",
+        "default",
+        serde_json::json!({"file_path": "/tmp/test/new.rs", "content": "data"}),
+    );
+    let (stdout, exit_code) = run_hook_with_config(&input, config);
+    assert_eq!(exit_code, 0);
+    let (decision, _) = parse_output(&stdout);
+    assert_eq!(decision, "allow");
+}
+
+#[test]
+fn ft_edit_cwd_allow() {
+    let config = r#"
+        files {
+            deny "~/.ssh/**" "edit"
+            "<cwd>/**" { allow "edit" }
+        }
+    "#;
+    let input = make_input_json(
+        "Edit",
+        "default",
+        serde_json::json!({"file_path": "/tmp/test/lib.rs", "old_string": "a", "new_string": "b"}),
+    );
+    let (stdout, exit_code) = run_hook_with_config(&input, config);
+    assert_eq!(exit_code, 0);
+    let (decision, _) = parse_output(&stdout);
+    assert_eq!(decision, "allow");
+}
+
+// ---- Glob/Grep tests ----
+
+// Glob without path → CWD default (/tmp/test). <cwd>/** does NOT match CWD itself,
+// and no other glob rule matches → None (empty JSON).
+ft_test_empty!(ft_glob_no_path_cwd_default,
+    tool: "Glob",
+    input: serde_json::json!({"pattern": "**/*.rs"}));
+
+// Glob with explicit path inside CWD → allow (<cwd>/** matches sub-paths)
+ft_test!(ft_glob_cwd_subpath_allow,
+    tool: "Glob",
+    input: serde_json::json!({"pattern": "**/*.rs", "path": "/tmp/test/src"}),
+    expect: "allow");
+
+// Grep with explicit path outside CWD → no matching grep rule → None
+ft_test_empty!(ft_grep_outside_cwd,
+    tool: "Grep",
+    input: serde_json::json!({"pattern": "TODO", "path": "/etc"}));
+
+// Grep with CWD sub-path → allow
+ft_test!(ft_grep_cwd_subpath_allow,
+    tool: "Grep",
+    input: serde_json::json!({"pattern": "TODO", "path": "/tmp/test/src"}),
+    expect: "allow");
+
+// ---- Variable expansion tests ----
+
+// <cwd> in rule pattern expands to CWD from hook input (/tmp/test)
+ft_test!(ft_var_cwd_expansion,
+    tool: "Read",
+    input: serde_json::json!({"file_path": "/tmp/test/deep/nested/file.rs"}),
+    expect: "allow");
+
+// ~ in deny rule expands to $HOME
+ft_test!(ft_var_tilde_expansion,
+    tool: "Read",
+    input: serde_json::json!({"file_path": "~/.ssh/config"}),
+    expect: "deny");
+
+// ---- Path normalization tests ----
+
+// Relative path normalizes against CWD → /tmp/test/src/main.rs → matches <cwd>/**
+ft_test!(ft_path_relative_normalizes,
+    tool: "Read",
+    input: serde_json::json!({"file_path": "src/main.rs"}),
+    expect: "allow");
+
+// Path with .. resolves → /tmp/test/src/main.rs → matches <cwd>/**
+ft_test!(ft_path_dotdot_resolves,
+    tool: "Read",
+    input: serde_json::json!({"file_path": "/tmp/test/foo/../src/main.rs"}),
+    expect: "allow");
+
+// ---- Backwards compatibility tests ----
+
+// Bash-only config + file tool → empty JSON (already covered by non_bash_* tests above)
+
+// Files-only config + Bash tool → empty JSON (no bash section → no opinion)
+#[test]
+fn ft_compat_files_only_config_bash_tool() {
+    let files_only = r#"files { allow "/tmp/**" "read" "write" "edit" "glob" "grep" }"#;
+    let (stdout, exit_code) =
+        run_hook_with_config(&bash_input_json("git status", "default"), files_only);
+    assert_eq!(exit_code, 0);
+    assert_empty_json(&stdout);
+}
+
+// Mixed config: Bash tool evaluated against bash rules
+#[test]
+fn ft_compat_mixed_config_bash_uses_bash_rules() {
+    let mixed = r#"
+        bash { allow "git"; deny "rm" }
+        files { allow "/tmp/**" "read" }
+    "#;
+    let (stdout, exit_code) =
+        run_hook_with_config(&bash_input_json("git status", "default"), mixed);
+    assert_eq!(exit_code, 0);
+    let (decision, _) = parse_output(&stdout);
+    assert_eq!(decision, "allow");
+}
+
+// Mixed config: File tool evaluated against file rules
+#[test]
+fn ft_compat_mixed_config_file_uses_file_rules() {
+    let mixed = r#"
+        bash { allow "git"; deny "rm" }
+        files { allow "/tmp/**" "read" }
+    "#;
+    let input = make_input_json(
+        "Read",
+        "default",
+        serde_json::json!({"file_path": "/tmp/test/file.rs"}),
+    );
+    let (stdout, exit_code) = run_hook_with_config(&input, mixed);
+    assert_eq!(exit_code, 0);
+    let (decision, _) = parse_output(&stdout);
+    assert_eq!(decision, "allow");
+}
+
+// ---- Mode modifier tests ----
+
+// File tool ask + bypassPermissions → allow
+ft_test_mode!(ft_mode_bypass_ask_allows,
+    tool: "Write",
+    input: serde_json::json!({"file_path": "/etc/passwd", "content": "data"}),
+    mode: "bypassPermissions",
+    expect: "allow");
+
+// File tool ask + dontAsk → deny
+ft_test_mode!(ft_mode_dontask_ask_denies,
+    tool: "Write",
+    input: serde_json::json!({"file_path": "/etc/passwd", "content": "data"}),
+    mode: "dontAsk",
+    expect: "deny");
+
+// ---- Fail-closed tests ----
+
+// Read with missing file_path → ask
+ft_test!(ft_fail_closed_missing_path,
+    tool: "Read",
+    input: serde_json::json!({}),
+    expect: "ask");
+
+// Read with empty file_path → ask
+ft_test!(ft_fail_closed_empty_path,
+    tool: "Read",
+    input: serde_json::json!({"file_path": ""}),
+    expect: "ask");

@@ -1,0 +1,10 @@
+files {
+    deny "~/.ssh/**" "read" "write" "edit"
+    deny "~/.env" "read" "write" "edit"
+
+    "<cwd>/**" {
+        allow "read" "write" "edit" "glob" "grep"
+    }
+
+    ask "/**" "write" "edit"
+}
