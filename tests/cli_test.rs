@@ -385,6 +385,166 @@ fn empty_bash_section_unlisted_returns_empty() {
     assert_empty_json(&stdout);
 }
 
+// ==== Argument matching integration tests (spec-005/005a) ====
+//
+// All tests use the shared config fixture: tests/fixtures/argument-matching.kdl
+// Each test verifies the full pipeline: stdin JSON → config → parse → match → decision → stdout JSON.
+
+fn arg_matching_config() -> String {
+    load_fixture("argument-matching.kdl")
+}
+
+/// Fixture-based test: loads the argument-matching config, sends a command, asserts decision.
+macro_rules! arg_test {
+    ($name:ident, cmd: $cmd:expr, expect: $expected:expr) => {
+        #[test]
+        fn $name() {
+            let (stdout, exit_code) =
+                run_hook_with_config(&bash_input_json($cmd, "default"), &arg_matching_config());
+            assert_eq!(exit_code, 0);
+            let (decision, _) = parse_output(&stdout);
+            assert_eq!(
+                decision, $expected,
+                "command {:?} expected {} but got {}",
+                $cmd, $expected, decision
+            );
+        }
+    };
+}
+
+/// Fixture-based test with permission mode override.
+macro_rules! arg_test_mode {
+    ($name:ident, cmd: $cmd:expr, mode: $mode:expr, expect: $expected:expr) => {
+        #[test]
+        fn $name() {
+            let (stdout, exit_code) =
+                run_hook_with_config(&bash_input_json($cmd, $mode), &arg_matching_config());
+            assert_eq!(exit_code, 0);
+            let (decision, _) = parse_output(&stdout);
+            assert_eq!(
+                decision, $expected,
+                "command {:?} (mode={}) expected {} but got {}",
+                $cmd, $mode, $expected, decision
+            );
+        }
+    };
+}
+
+/// Fixture-based test: expects empty JSON (no opinion / unlisted).
+macro_rules! arg_test_empty {
+    ($name:ident, cmd: $cmd:expr) => {
+        #[test]
+        fn $name() {
+            let (stdout, exit_code) =
+                run_hook_with_config(&bash_input_json($cmd, "default"), &arg_matching_config());
+            assert_eq!(exit_code, 0);
+            assert_empty_json(&stdout);
+        }
+    };
+}
+
+// ---- Rows 1-12: Single-line argument rules ----
+
+arg_test!(row01_rm_rf_root,              cmd: "rm -rf /",               expect: "deny");
+arg_test!(row02_rm_rf_tmp,               cmd: "rm -rf /tmp",            expect: "deny");
+arg_test!(row03_rm_rf_users_foo,         cmd: "rm -rf /Users/foo",      expect: "deny");
+arg_test!(row04_rm_fr_root,              cmd: "rm -fr /",               expect: "deny");
+arg_test!(row05_rm_root_rf,              cmd: "rm / -rf",               expect: "deny");
+arg_test!(row06_rm_rvf_tmp,              cmd: "rm -rvf /tmp",           expect: "deny");
+arg_test!(row07_rm_r_tmp,                cmd: "rm -r /tmp",             expect: "deny");
+arg_test_empty!(row08_rm_file,           cmd: "rm file.txt");
+arg_test!(row09_git_push_force_origin,   cmd: "git push --force origin", expect: "deny");
+arg_test!(row10_git_push_origin,         cmd: "git push origin",        expect: "allow");
+arg_test!(row11_docker_system_prune,     cmd: "docker system prune --force", expect: "allow");
+arg_test_empty!(row12_docker_prune,      cmd: "docker prune");
+
+// ---- Rows 13-25: Children block rules ----
+
+arg_test!(row13_rm_rf_root_children,     cmd: "rm -rf /",               expect: "deny");
+arg_test!(row14_rm_rf_tmp_children,      cmd: "rm -rf /tmp",            expect: "deny");
+arg_test!(row15_rm_rf_home_user,         cmd: "rm -rf /home/user",      expect: "deny");
+arg_test!(row16_rm_glob_rf_flags_sep,    cmd: "rm /* -rf",              expect: "deny");
+arg_test!(row17_rm_rf_file_txt,          cmd: "rm -rf file.txt",        expect: "deny");
+arg_test!(row18_rm_r_tmp_optional,       cmd: "rm -r /tmp",             expect: "deny");
+arg_test!(row19_rm_f_tmp_optional,       cmd: "rm -f /tmp",             expect: "deny");
+arg_test_empty!(row20_rm_tmp_no_flags,   cmd: "rm /tmp");
+arg_test!(row21_claude_mcp_add_linear,   cmd: "claude mcp add linear",  expect: "allow");
+arg_test!(row22_claude_mcp_add_github,   cmd: "claude mcp add github",  expect: "allow");
+arg_test_empty!(row23_claude_add_mcp,    cmd: "claude add mcp linear");
+arg_test!(row24_curl_upload_file,        cmd: "curl --upload-file data.txt url", expect: "ask");
+arg_test_empty!(row25_curl_url_no_flag,  cmd: "curl url");
+
+// ---- Rows 26-35: Subcommand grouping ----
+
+arg_test!(row26_git_status,              cmd: "git status",             expect: "allow");
+arg_test!(row27_git_log_oneline,         cmd: "git log --oneline",      expect: "allow");
+arg_test!(row28_git_diff_head,           cmd: "git diff HEAD~1",        expect: "allow");
+arg_test!(row29_git_push_origin,         cmd: "git push origin",        expect: "allow");
+arg_test!(row30_git_rebase_main,         cmd: "git rebase main",        expect: "allow");
+arg_test!(row31_git_push_force,          cmd: "git push --force",       expect: "deny");
+arg_test!(row32_git_force_push_origin,   cmd: "git --force push origin", expect: "deny");
+arg_test!(row33_git_push_origin_force,   cmd: "git push origin --force", expect: "deny");
+arg_test!(row34_claude_mcp_add_server,   cmd: "claude mcp add server",  expect: "allow");
+arg_test_empty!(row35_claude_config,     cmd: "claude config");
+
+// ---- Rows 36-40: Precedence ----
+
+arg_test!(row36_git_push_force_prec,     cmd: "git push --force origin", expect: "deny");
+arg_test!(row37_git_status_prec,         cmd: "git status",             expect: "allow");
+arg_test!(row38_rm_rf_tmp_prec,          cmd: "rm -rf /tmp",            expect: "deny");
+arg_test!(row39_rm_f_tmp_prec,           cmd: "rm -f /tmp",             expect: "deny");
+arg_test!(row40_ls_la,                   cmd: "ls -la",                 expect: "allow");
+
+// ---- Multi-command aggregation ----
+
+arg_test!(multi_status_and_rm_rf,   cmd: "git status && rm -rf /",       expect: "deny");
+arg_test!(multi_push_force_pipe,    cmd: "git push --force | tee log",   expect: "deny");
+arg_test!(multi_ls_and_cat,         cmd: "ls && cat file",               expect: "allow");
+
+// ---- Permission mode modifiers ----
+
+arg_test_mode!(mode_bypass_ask_rule,    cmd: "curl --upload-file x url", mode: "bypassPermissions", expect: "allow");
+arg_test_mode!(mode_dontask_ask_rule,   cmd: "curl --upload-file x url", mode: "dontAsk",           expect: "deny");
+arg_test_mode!(mode_bypass_deny_rule,   cmd: "rm -rf /tmp",             mode: "bypassPermissions", expect: "deny");
+
+// ---- Edge cases ----
+
+arg_test!(edge_flag_expansion_rf,       cmd: "rm -rf /",                expect: "deny");
+arg_test!(edge_flag_expansion_fr,       cmd: "rm -fr /",                expect: "deny");
+arg_test!(edge_extra_flags_rvf,         cmd: "rm -rvf /",               expect: "deny");
+arg_test!(edge_flag_at_end,             cmd: "rm / -rf",                expect: "deny");
+arg_test!(edge_flags_only_rule,         cmd: "rm -rf /anything",        expect: "deny");
+arg_test!(edge_env_var_rm_rf,           cmd: "ENV=val rm -rf /",        expect: "deny");
+arg_test_empty!(edge_no_matching_rule,  cmd: "python script.py");
+
+#[test]
+fn edge_empty_command() {
+    let input = make_input_json("Bash", "default", serde_json::json!({"command": ""}));
+    let (stdout, exit_code) = run_hook_with_config(&input, &arg_matching_config());
+    assert_eq!(exit_code, 0);
+    let (decision, _) = parse_output(&stdout);
+    assert_eq!(decision, "ask", "empty command should fail-closed to ask");
+}
+
+#[test]
+fn edge_parse_error_command() {
+    let (stdout, exit_code) =
+        run_hook_with_config(&bash_input_json("git add . &&", "default"), &arg_matching_config());
+    assert_eq!(exit_code, 0);
+    let (decision, _) = parse_output(&stdout);
+    assert_eq!(decision, "ask", "parse error should fail-closed to ask");
+}
+
+#[test]
+fn edge_flag_expansion_r_space_f() {
+    // `-r -f` should produce the same result as `-rf`
+    let (stdout, exit_code) =
+        run_hook_with_config(&bash_input_json("rm -r -f /", "default"), &arg_matching_config());
+    assert_eq!(exit_code, 0);
+    let (decision, _) = parse_output(&stdout);
+    assert_eq!(decision, "deny", "rm -r -f / should match the same as rm -rf /");
+}
+
 // ---- Output structure validation ----
 
 #[test]

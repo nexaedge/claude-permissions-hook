@@ -1,0 +1,48 @@
+bash {
+    // Simple program rules (v0.2.0 compat)
+    allow "ls" "cat" "echo"
+
+    // Inline argument rules
+    deny "rm -rf /"
+    deny "rm -rf /*"
+    deny "rm -rf"
+    deny "git push --force"
+    allow "docker system prune"
+
+    // Children block: flags + positionals
+    deny "rm -rf" {
+        files "/" "/*" "/home/*"
+    }
+
+    // Children block: optional flags
+    deny "rm" {
+        optional-flags "r" "f"
+    }
+
+    // Children block: subcommand grouping
+    allow "git" {
+        subcommands "status" "log" "diff" "branch" "stash"
+    }
+
+    allow "claude" {
+        subcommands "mcp add" "mcp remove" "mcp list"
+    }
+
+    deny "git" {
+        subcommands "push"
+        required-flags "force"
+    }
+
+    // Children block: required arguments
+    ask "curl" {
+        required-arguments "--upload-file *"
+    }
+
+    // Children block: subcommand + positionals
+    allow "claude mcp add" {
+        remotes "linear"
+    }
+
+    // Catch-all allow for git (lowest priority within allow tier)
+    allow "git"
+}
