@@ -604,8 +604,10 @@ macro_rules! ft_test {
     ($name:ident, tool: $tool:expr, input: $input:expr, expect: $expected:expr) => {
         #[test]
         fn $name() {
-            let (stdout, exit_code) =
-                run_hook_with_config(&make_input_json($tool, "default", $input), &file_tools_config());
+            let (stdout, exit_code) = run_hook_with_config(
+                &make_input_json($tool, "default", $input),
+                &file_tools_config(),
+            );
             assert_eq!(exit_code, 0);
             let (decision, _) = parse_output(&stdout);
             assert_eq!(
@@ -640,8 +642,10 @@ macro_rules! ft_test_empty {
     ($name:ident, tool: $tool:expr, input: $input:expr) => {
         #[test]
         fn $name() {
-            let (stdout, exit_code) =
-                run_hook_with_config(&make_input_json($tool, "default", $input), &file_tools_config());
+            let (stdout, exit_code) = run_hook_with_config(
+                &make_input_json($tool, "default", $input),
+                &file_tools_config(),
+            );
             assert_eq!(exit_code, 0);
             assert_empty_json(&stdout);
         }
