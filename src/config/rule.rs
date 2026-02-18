@@ -193,8 +193,15 @@ fn classify_args(args: &[String]) -> (HashSet<&str>, Vec<&str>) {
 /// Looks for the flag in two forms:
 /// 1. Separate: `--flag value` (flag at position i, value at i+1 if not a flag)
 /// 2. Equals: `--flag=value` (split on first `=`)
+///
+/// Honors `--` as end-of-options: tokens after `--` are positional and
+/// cannot satisfy flag-value requirements.
 fn find_argument_value(args: &[String], req: &ArgumentPattern) -> bool {
     for (i, arg) in args.iter().enumerate() {
+        // Stop interpreting flags after --
+        if *arg == "--" {
+            return false;
+        }
         // Form 1: separate args (--flag value)
         if *arg == req.flag {
             if let Some(next) = args.get(i + 1) {
@@ -865,5 +872,27 @@ mod tests {
     #[test]
     fn no_match_program_different_name() {
         assert!(!rule("rm").matches(&seg("mv", &["-f"])));
+    }
+
+    // --- Regression: required arguments after -- ---
+
+    #[test]
+    fn no_match_required_argument_after_double_dash() {
+        // curl -- --upload-file data.txt → flag after -- is positional, not a flag
+        let r = rule_required_arguments("curl", &[("--upload-file", "*")]);
+        assert!(!r.matches(&seg("curl", &["--", "--upload-file", "data.txt"])));
+    }
+
+    #[test]
+    fn no_match_required_argument_equals_after_double_dash() {
+        let r = rule_required_arguments("curl", &[("--upload-file", "*")]);
+        assert!(!r.matches(&seg("curl", &["--", "--upload-file=data.txt"])));
+    }
+
+    #[test]
+    fn match_required_argument_before_double_dash() {
+        // --upload-file before -- is still a valid flag
+        let r = rule_required_arguments("curl", &[("--upload-file", "*")]);
+        assert!(r.matches(&seg("curl", &["--upload-file", "data.txt", "--", "url"])));
     }
 }

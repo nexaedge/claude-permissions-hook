@@ -203,9 +203,7 @@ mod tests {
     // --- Lookup tests ---
 
     fn config_with_bash(bash: BashConfig) -> Config {
-        Config {
-            bash: Some(bash),
-        }
+        Config { bash: Some(bash) }
     }
 
     #[test]
@@ -214,10 +212,7 @@ mod tests {
             allow: rules_of(&["git"]),
             ..Default::default()
         });
-        assert_eq!(
-            bash(&config).lookup(&seg("git")),
-            Some(Decision::Allow)
-        );
+        assert_eq!(bash(&config).lookup(&seg("git")), Some(Decision::Allow));
     }
 
     #[test]
@@ -235,10 +230,7 @@ mod tests {
             ask: rules_of(&["docker"]),
             ..Default::default()
         });
-        assert_eq!(
-            bash(&config).lookup(&seg("docker")),
-            Some(Decision::Ask)
-        );
+        assert_eq!(bash(&config).lookup(&seg("docker")), Some(Decision::Ask));
     }
 
     #[test]
@@ -268,10 +260,7 @@ mod tests {
             ask: rules_of(&["docker"]),
             ..Default::default()
         });
-        assert_eq!(
-            bash(&config).lookup(&seg("docker")),
-            Some(Decision::Ask)
-        );
+        assert_eq!(bash(&config).lookup(&seg("docker")), Some(Decision::Ask));
     }
 
     // --- File loading tests ---
@@ -333,6 +322,80 @@ mod tests {
         assert_eq!(
             bash(&config).lookup(&seg("./scripts/deploy")),
             Some(Decision::Allow)
+        );
+    }
+
+    // --- Conditional lookup tests (precedence with argument matching) ---
+
+    fn seg_with_args(program: &str, args: &[&str]) -> CommandSegment {
+        CommandSegment {
+            program: program.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn rule_with_flags(program: &str, flags: &[&str]) -> rule::BashRule {
+        rule::BashRule {
+            program: program.to_string(),
+            conditions: rule::RuleConditions {
+                required_flags: flags.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn lookup_conditional_deny_matches_returns_deny() {
+        let config = config_with_bash(BashConfig {
+            allow: rules_of(&["rm"]),
+            deny: vec![rule_with_flags("rm", &["-r", "-f"])],
+            ..Default::default()
+        });
+        // rm -rf / matches the deny rule → Deny wins over Allow
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("rm", &["-r", "-f", "/"])),
+            Some(Decision::Deny)
+        );
+    }
+
+    #[test]
+    fn lookup_conditional_deny_misses_falls_through_to_allow() {
+        let config = config_with_bash(BashConfig {
+            allow: rules_of(&["rm"]),
+            deny: vec![rule_with_flags("rm", &["-r", "-f"])],
+            ..Default::default()
+        });
+        // rm file.txt doesn't match deny rule (no -r -f) → falls to Allow
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("rm", &["file.txt"])),
+            Some(Decision::Allow)
+        );
+    }
+
+    #[test]
+    fn lookup_conditional_deny_miss_ask_hit() {
+        let config = config_with_bash(BashConfig {
+            deny: vec![rule_with_flags("rm", &["-r", "-f"])],
+            ask: rules_of(&["rm"]),
+            ..Default::default()
+        });
+        // rm file.txt doesn't match deny (no -r -f), but matches unconditional ask
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("rm", &["file.txt"])),
+            Some(Decision::Ask)
+        );
+    }
+
+    #[test]
+    fn lookup_all_conditional_miss_returns_none() {
+        let config = config_with_bash(BashConfig {
+            deny: vec![rule_with_flags("rm", &["-r", "-f"])],
+            ..Default::default()
+        });
+        // rm file.txt doesn't match any rule → None
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("rm", &["file.txt"])),
+            None
         );
     }
 
