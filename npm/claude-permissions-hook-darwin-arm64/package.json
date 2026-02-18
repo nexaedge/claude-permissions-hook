@@ -1,6 +1,6 @@
 {
   "name": "claude-permissions-hook-darwin-arm64",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Platform binary for claude-permissions-hook (macOS ARM64)",
   "license": "MIT",
   "repository": {
@@ -10,8 +10,12 @@
   "files": [
     "bin/"
   ],
-  "os": ["darwin"],
-  "cpu": ["arm64"],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
   "bin": {
     "claude-permissions-hook": "bin/claude-permissions-hook"
   }
