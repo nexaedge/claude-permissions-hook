@@ -1,6 +1,6 @@
 ## [0.3.0] - 2026-02-18
 
-### Features
+### Bug Fixes
 
-- add argument matching for flags, subcommands, and positionals ([37e4af9](https://github.com/nexaedge/claude-permissions-hook/commit/37e4af91776e2a5e0314a5b7a643ac7223525719))
+- use annotated tag in release workflow ([09df339](https://github.com/nexaedge/claude-permissions-hook/commit/09df339ec76b367c517dedbf0b5c18a22412956e))
 
