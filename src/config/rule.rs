@@ -895,4 +895,168 @@ mod tests {
         let r = rule_required_arguments("curl", &[("--upload-file", "*")]);
         assert!(r.matches(&seg("curl", &["--upload-file", "data.txt", "--", "url"])));
     }
+
+    // --- Group 11: Subcommands + Positionals (Named Matchers) Combined ---
+
+    fn rule_subcommands_with_positionals(
+        program: &str,
+        chains: &[&[&str]],
+        patterns: &[&str],
+    ) -> BashRule {
+        BashRule {
+            program: program.to_string(),
+            conditions: RuleConditions {
+                subcommands: chains
+                    .iter()
+                    .map(|c| c.iter().map(|s| s.to_string()).collect())
+                    .collect(),
+                positionals: patterns.iter().map(|p| compile_glob(p).unwrap()).collect(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn match_subcommands_and_positionals_both_pass() {
+        // deny "git" { subcommands "push"; remotes "origin" }
+        let r = rule_subcommands_with_positionals("git", &[&["push"]], &["origin"]);
+        assert!(r.matches(&seg("git", &["push", "origin", "main"])));
+    }
+
+    #[test]
+    fn no_match_subcommands_ok_positionals_missing() {
+        // git push upstream → "origin" not in positionals
+        let r = rule_subcommands_with_positionals("git", &[&["push"]], &["origin"]);
+        assert!(!r.matches(&seg("git", &["push", "upstream", "main"])));
+    }
+
+    #[test]
+    fn no_match_positionals_ok_subcommands_wrong() {
+        // git pull origin → "pull" doesn't match subcommands ["push"]
+        let r = rule_subcommands_with_positionals("git", &[&["push"]], &["origin"]);
+        assert!(!r.matches(&seg("git", &["pull", "origin"])));
+    }
+
+    #[test]
+    fn match_subcommands_and_positionals_with_flags() {
+        // git --force push origin main → flags stripped, subcommands "push" matches, "origin" in positionals
+        let r = rule_subcommands_with_positionals("git", &[&["push"]], &["origin"]);
+        assert!(r.matches(&seg("git", &["--force", "push", "origin", "main"])));
+    }
+
+    // --- Group 12: Subcommands + Optional Flags Combined ---
+
+    fn rule_subcommands_with_optional_flags(
+        program: &str,
+        chains: &[&[&str]],
+        flags: &[&str],
+    ) -> BashRule {
+        BashRule {
+            program: program.to_string(),
+            conditions: RuleConditions {
+                subcommands: chains
+                    .iter()
+                    .map(|c| c.iter().map(|s| s.to_string()).collect())
+                    .collect(),
+                optional_flags: flags.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn match_subcommands_and_optional_flags_first_flag() {
+        let r =
+            rule_subcommands_with_optional_flags("git", &[&["push"]], &["--force", "--no-verify"]);
+        assert!(r.matches(&seg("git", &["push", "--force", "origin"])));
+    }
+
+    #[test]
+    fn match_subcommands_and_optional_flags_second_flag() {
+        let r =
+            rule_subcommands_with_optional_flags("git", &[&["push"]], &["--force", "--no-verify"]);
+        assert!(r.matches(&seg("git", &["push", "--no-verify", "origin"])));
+    }
+
+    #[test]
+    fn no_match_subcommands_ok_optional_flags_missing() {
+        let r =
+            rule_subcommands_with_optional_flags("git", &[&["push"]], &["--force", "--no-verify"]);
+        assert!(!r.matches(&seg("git", &["push", "origin"])));
+    }
+
+    #[test]
+    fn no_match_optional_flags_ok_subcommands_wrong() {
+        let r =
+            rule_subcommands_with_optional_flags("git", &[&["push"]], &["--force", "--no-verify"]);
+        assert!(!r.matches(&seg("git", &["pull", "--force"])));
+    }
+
+    // --- Group 13: Empty Subcommands Block ---
+
+    #[test]
+    fn match_empty_subcommands_matches_any() {
+        // Empty subcommands = no subcommand restriction
+        let r = rule_subcommands("git", &[]);
+        assert!(r.matches(&seg("git", &["push", "origin"])));
+    }
+
+    #[test]
+    fn match_empty_subcommands_matches_no_args() {
+        let r = rule_subcommands("git", &[]);
+        assert!(r.matches(&seg("git", &[])));
+    }
+
+    // --- Group 14: Rule String Subcommand + Children Subcommands (Both Set → AND) ---
+
+    #[test]
+    fn match_inline_subcommand_and_children_subcommands_both_pass() {
+        // Rule has subcommand ["push"] from inline AND subcommands [["origin"]] from children
+        // Both must match — actual non-flag args must start with "push" AND start with "origin"
+        // Since subcommand checks ordered prefix and subcommands also checks ordered prefix,
+        // "push origin main" → subcommand ["push"] matches prefix, subcommands [["origin"]]...
+        // Wait — subcommands also works on the full positional list, so "push" won't match ["origin"]
+        // unless the positionals are ["push", "origin", "main"] and the chain is ["origin"].
+        // Actually this combination is unusual and "confusing" per spec — let's verify the AND behavior.
+        let r = BashRule {
+            program: "git".to_string(),
+            conditions: RuleConditions {
+                subcommand: vec!["push".to_string()],
+                subcommands: vec![vec!["push".to_string(), "origin".to_string()]],
+                ..Default::default()
+            },
+        };
+        // "push origin main" → subcommand_matches: positionals start with ["push"] ✓
+        //                    → subcommands_match: positionals start with ["push", "origin"] ✓
+        assert!(r.matches(&seg("git", &["push", "origin", "main"])));
+    }
+
+    #[test]
+    fn no_match_inline_subcommand_ok_children_subcommands_miss() {
+        let r = BashRule {
+            program: "git".to_string(),
+            conditions: RuleConditions {
+                subcommand: vec!["push".to_string()],
+                subcommands: vec![vec!["push".to_string(), "origin".to_string()]],
+                ..Default::default()
+            },
+        };
+        // "push upstream main" → subcommand_matches: ["push"] ✓
+        //                      → subcommands_match: ["push", "origin"] ✗ ("upstream" ≠ "origin")
+        assert!(!r.matches(&seg("git", &["push", "upstream", "main"])));
+    }
+
+    #[test]
+    fn no_match_children_subcommands_ok_inline_subcommand_miss() {
+        let r = BashRule {
+            program: "git".to_string(),
+            conditions: RuleConditions {
+                subcommand: vec!["push".to_string()],
+                subcommands: vec![vec!["pull".to_string()]],
+                ..Default::default()
+            },
+        };
+        // "pull origin" → subcommand_matches: ["push"] ✗ ("pull" ≠ "push")
+        assert!(!r.matches(&seg("git", &["pull", "origin"])));
+    }
 }

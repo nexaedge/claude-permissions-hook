@@ -666,6 +666,302 @@ mod tests {
         assert!(err.contains("line 4"), "should report line 4, got: {err}");
     }
 
+    // --- Subcommand grouping decision-layer tests ---
+
+    fn rule_with_subcommands(program: &str, chains: &[&[&str]]) -> rule::BashRule {
+        rule::BashRule {
+            program: program.to_string(),
+            conditions: rule::RuleConditions {
+                subcommands: chains
+                    .iter()
+                    .map(|c| c.iter().map(|s| s.to_string()).collect())
+                    .collect(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn lookup_subcommands_allow_matches() {
+        // allow "git" { subcommands "status" "log" "diff" } → git status → Allow
+        let config = config_with_bash(BashConfig {
+            allow: vec![rule_with_subcommands(
+                "git",
+                &[&["status"], &["log"], &["diff"]],
+            )],
+            ..Default::default()
+        });
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("git", &["status"])),
+            Some(Decision::Allow)
+        );
+    }
+
+    #[test]
+    fn lookup_subcommands_allow_no_match_returns_none() {
+        // allow "git" { subcommands "status" } → git push → None (rule doesn't match)
+        let config = config_with_bash(BashConfig {
+            allow: vec![rule_with_subcommands("git", &[&["status"]])],
+            ..Default::default()
+        });
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("git", &["push"])),
+            None
+        );
+    }
+
+    #[test]
+    fn lookup_subcommands_deny_blocks_allow_fallthrough() {
+        // deny "git" { subcommands "push"; required-flags "force" }
+        // allow "git" { subcommands "status" "log" "push" }
+        // git push --force → deny matches → Deny
+        let config = config_with_bash(BashConfig {
+            deny: vec![rule::BashRule {
+                program: "git".to_string(),
+                conditions: rule::RuleConditions {
+                    subcommands: vec![vec!["push".to_string()]],
+                    required_flags: ["--force".to_string()].into(),
+                    ..Default::default()
+                },
+            }],
+            allow: vec![rule_with_subcommands(
+                "git",
+                &[&["status"], &["log"], &["push"]],
+            )],
+            ..Default::default()
+        });
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("git", &["push", "--force", "origin"])),
+            Some(Decision::Deny)
+        );
+    }
+
+    #[test]
+    fn lookup_subcommands_deny_miss_falls_to_allow() {
+        // deny "git" { subcommands "push"; required-flags "force" }
+        // allow "git" { subcommands "status" "log" "push" }
+        // git push origin → deny misses (no --force) → allow matches → Allow
+        let config = config_with_bash(BashConfig {
+            deny: vec![rule::BashRule {
+                program: "git".to_string(),
+                conditions: rule::RuleConditions {
+                    subcommands: vec![vec!["push".to_string()]],
+                    required_flags: ["--force".to_string()].into(),
+                    ..Default::default()
+                },
+            }],
+            allow: vec![rule_with_subcommands(
+                "git",
+                &[&["status"], &["log"], &["push"]],
+            )],
+            ..Default::default()
+        });
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("git", &["push", "origin"])),
+            Some(Decision::Allow)
+        );
+    }
+
+    #[test]
+    fn lookup_subcommands_multi_word_chain() {
+        // allow "claude" { subcommands "mcp add" "mcp remove" }
+        // claude mcp add server → Allow
+        let config = config_with_bash(BashConfig {
+            allow: vec![rule_with_subcommands(
+                "claude",
+                &[&["mcp", "add"], &["mcp", "remove"]],
+            )],
+            ..Default::default()
+        });
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("claude", &["mcp", "add", "server"])),
+            Some(Decision::Allow)
+        );
+    }
+
+    #[test]
+    fn lookup_subcommands_multi_word_no_match() {
+        // allow "claude" { subcommands "mcp add" "mcp remove" }
+        // claude mcp list → None
+        let config = config_with_bash(BashConfig {
+            allow: vec![rule_with_subcommands(
+                "claude",
+                &[&["mcp", "add"], &["mcp", "remove"]],
+            )],
+            ..Default::default()
+        });
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("claude", &["mcp", "list"])),
+            None
+        );
+    }
+
+    #[test]
+    fn lookup_subcommands_with_named_positional() {
+        // deny "git" { subcommands "push"; remotes "origin" }
+        // Built manually since named positionals are parsed as positionals
+        let config = config_with_bash(BashConfig {
+            deny: vec![rule::BashRule {
+                program: "git".to_string(),
+                conditions: rule::RuleConditions {
+                    subcommands: vec![vec!["push".to_string()]],
+                    positionals: vec![rule::compile_glob("origin").unwrap()],
+                    ..Default::default()
+                },
+            }],
+            allow: rules_of(&["git"]),
+            ..Default::default()
+        });
+        // git push origin → deny matches (subcommands + positionals) → Deny
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("git", &["push", "origin"])),
+            Some(Decision::Deny)
+        );
+        // git push upstream → deny misses (positional "origin" not found) → Allow
+        assert_eq!(
+            bash(&config).lookup(&seg_with_args("git", &["push", "upstream"])),
+            Some(Decision::Allow)
+        );
+    }
+
+    // --- End-to-end: KDL parsing → lookup for grouping patterns ---
+
+    #[test]
+    fn e2e_subcommands_grouping_allow() {
+        let config = Config::parse(
+            r#"
+            bash {
+                allow "git" {
+                    subcommands "status" "log" "diff" "branch" "stash"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let b = bash(&config);
+        assert_eq!(
+            b.lookup(&seg_with_args("git", &["status"])),
+            Some(Decision::Allow)
+        );
+        assert_eq!(
+            b.lookup(&seg_with_args("git", &["log", "--oneline"])),
+            Some(Decision::Allow)
+        );
+        assert_eq!(
+            b.lookup(&seg_with_args("git", &["diff", "HEAD~1"])),
+            Some(Decision::Allow)
+        );
+        assert_eq!(b.lookup(&seg_with_args("git", &["push"])), None);
+        assert_eq!(b.lookup(&seg_with_args("git", &["rebase"])), None);
+    }
+
+    #[test]
+    fn e2e_subcommands_multi_word_allow() {
+        let config = Config::parse(
+            r#"
+            bash {
+                allow "claude" {
+                    subcommands "mcp add" "mcp remove" "mcp list"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let b = bash(&config);
+        assert_eq!(
+            b.lookup(&seg_with_args("claude", &["mcp", "add", "server"])),
+            Some(Decision::Allow)
+        );
+        assert_eq!(
+            b.lookup(&seg_with_args("claude", &["mcp", "remove", "server"])),
+            Some(Decision::Allow)
+        );
+        assert_eq!(b.lookup(&seg_with_args("claude", &["config"])), None);
+        assert_eq!(
+            b.lookup(&seg_with_args("claude", &["mcp", "server"])),
+            None
+        );
+    }
+
+    #[test]
+    fn e2e_subcommands_deny_with_required_flags() {
+        let config = Config::parse(
+            r#"
+            bash {
+                deny "git" {
+                    subcommands "push"
+                    required-flags "force"
+                }
+                allow "git"
+            }
+            "#,
+        )
+        .unwrap();
+        let b = bash(&config);
+        // git push --force → Deny
+        assert_eq!(
+            b.lookup(&seg_with_args("git", &["push", "--force", "origin"])),
+            Some(Decision::Deny)
+        );
+        // git push → Allow (deny misses, unconditional allow)
+        assert_eq!(
+            b.lookup(&seg_with_args("git", &["push", "origin"])),
+            Some(Decision::Allow)
+        );
+    }
+
+    #[test]
+    fn e2e_subcommands_deny_with_named_positional() {
+        let config = Config::parse(
+            r#"
+            bash {
+                deny "git" {
+                    subcommands "push"
+                    remotes "origin"
+                }
+                allow "git"
+            }
+            "#,
+        )
+        .unwrap();
+        let b = bash(&config);
+        // git push origin → Deny
+        assert_eq!(
+            b.lookup(&seg_with_args("git", &["push", "origin"])),
+            Some(Decision::Deny)
+        );
+        // git push upstream → Allow (deny misses, unconditional allow)
+        assert_eq!(
+            b.lookup(&seg_with_args("git", &["push", "upstream"])),
+            Some(Decision::Allow)
+        );
+    }
+
+    #[test]
+    fn e2e_flags_between_subcommand_tokens() {
+        let config = Config::parse(
+            r#"
+            bash {
+                allow "git" {
+                    subcommands "push origin"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let b = bash(&config);
+        // git --force push origin → flags stripped, matches "push origin"
+        assert_eq!(
+            b.lookup(&seg_with_args("git", &["--force", "push", "origin"])),
+            Some(Decision::Allow)
+        );
+        // git push --force origin → flag in middle, still matches
+        assert_eq!(
+            b.lookup(&seg_with_args("git", &["push", "--force", "origin"])),
+            Some(Decision::Allow)
+        );
+    }
+
     #[test]
     fn error_propagates_through_config_parse() {
         let result = Config::parse(
