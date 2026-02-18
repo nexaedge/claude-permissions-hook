@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 
 use crate::file_tools::FileOperation;
+use crate::protocol::Decision;
 
 use super::document::ConfigDocument;
 use super::ConfigError;
@@ -28,6 +29,55 @@ pub struct FileRule {
     pub operations: HashSet<FileOperation>,
     /// 1-based line number in the source file.
     pub line: usize,
+}
+
+impl FilesConfig {
+    /// Look up a normalized path and operation against file rules.
+    ///
+    /// Checks tiers in order: deny → ask → allow. First matching tier wins.
+    /// Returns `None` if no rule in any tier matches.
+    ///
+    /// Invalid glob patterns fail toward the more restrictive outcome:
+    /// deny/ask tiers treat errors as matching, allow tier treats errors as non-matching.
+    pub fn lookup(
+        &self,
+        normalized_path: &str,
+        operation: FileOperation,
+        cwd: &str,
+        _home: &str,
+    ) -> Option<Decision> {
+        if matches_any_rule(&self.deny, normalized_path, operation, cwd, true) {
+            return Some(Decision::Deny);
+        }
+        if matches_any_rule(&self.ask, normalized_path, operation, cwd, true) {
+            return Some(Decision::Ask);
+        }
+        if matches_any_rule(&self.allow, normalized_path, operation, cwd, false) {
+            return Some(Decision::Allow);
+        }
+        None
+    }
+}
+
+/// Check if any rule in a tier matches the given path and operation.
+///
+/// `error_means_match`: when `true`, invalid glob patterns are treated as
+/// matching (fail-closed for deny/ask); when `false`, treated as non-matching
+/// (fail-closed for allow).
+fn matches_any_rule(
+    rules: &[FileRule],
+    normalized_path: &str,
+    operation: FileOperation,
+    cwd: &str,
+    error_means_match: bool,
+) -> bool {
+    rules.iter().any(|rule| {
+        if !rule.operations.contains(&operation) {
+            return false;
+        }
+        let expanded = crate::path::expand_pattern(&rule.raw_pattern, cwd);
+        crate::path::matches(normalized_path, &expanded).unwrap_or(error_means_match)
+    })
 }
 
 /// Parse the `files` section from a config document.

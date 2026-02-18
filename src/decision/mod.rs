@@ -1,16 +1,18 @@
 use crate::command;
 use crate::config::Config;
+use crate::file_tools::{self, FileOperation};
 use crate::protocol::output::Decision;
 use crate::protocol::{HookInput, HookOutput, PermissionMode};
 
 /// Evaluate a hook input against optional config and return a permission decision.
 ///
-/// Returns `None` when the hook has no opinion (non-Bash tools with config, or
-/// all programs unlisted). Returns `Some(output)` with a concrete decision otherwise.
+/// Returns `None` when the hook has no opinion (unrecognized tools, or all
+/// programs/paths unlisted). Returns `Some(output)` with a concrete decision otherwise.
 ///
 /// - No config → `Some(Ask)` for all tools (user needs to set up config)
-/// - Non-Bash tool with config → `None` (empty `{}` response)
-/// - Bash tool with config → parse command, lookup programs, aggregate, apply mode
+/// - Bash tool → parse command, lookup programs, aggregate, apply mode
+/// - File tool (Read/Write/Edit/Glob/Grep) → extract paths, lookup against file rules
+/// - Other tool → `None` (no opinion)
 pub fn evaluate(input: &HookInput, config: Option<&Config>) -> Option<HookOutput> {
     // No config → ask for everything (user needs to set up config)
     let config = match config {
@@ -22,48 +24,93 @@ pub fn evaluate(input: &HookInput, config: Option<&Config>) -> Option<HookOutput
         }
     };
 
-    // Non-Bash tool → no opinion (let Claude handle natively)
-    if input.tool_name != "Bash" {
-        return None;
+    match input.tool_name.as_str() {
+        "Bash" => evaluate_bash(input, config),
+        "Read" | "Write" | "Edit" | "Glob" | "Grep" => evaluate_file_tool(input, config),
+        _ => None,
     }
+}
 
-    // Bash tool: extract command
+/// Evaluate a Bash tool invocation against bash config rules.
+fn evaluate_bash(input: &HookInput, config: &Config) -> Option<HookOutput> {
     let command = match input.tool_input.get("command").and_then(|v| v.as_str()) {
         Some(cmd) => cmd,
         None => return Some(HookOutput::ask("Bash tool without command field")),
     };
 
-    // Empty command is suspicious
     if command.trim().is_empty() {
         return Some(HookOutput::ask("Empty bash command"));
     }
 
-    // Parse command into segments — fail closed on parse errors
     let segments = match command::parse(command) {
         Ok(segs) => segs,
         Err(e) => return Some(HookOutput::ask(format!("Failed to parse command: {e}"))),
     };
 
-    // Non-empty command but no programs extracted — fail closed
     if segments.is_empty() {
         return Some(HookOutput::ask(
             "No programs extracted from command".to_string(),
         ));
     }
 
-    // Look up each command segment against bash config
     let bash = config.bash.as_ref()?;
     let per_program: Vec<Option<Decision>> = segments.iter().map(|seg| bash.lookup(seg)).collect();
 
-    // Aggregate decisions
     let aggregated = aggregate_decisions(&per_program);
 
-    // Apply permission mode modifier
     match aggregated {
         Some(decision) => {
             let modified = apply_mode_modifier(decision.clone(), &input.permission_mode);
             let programs: Vec<&str> = segments.iter().map(|s| s.program.as_str()).collect();
             let reason = build_reason(&modified, &programs, &per_program, &decision);
+            Some(match modified {
+                Decision::Allow => HookOutput::allow(reason),
+                Decision::Ask => HookOutput::ask(reason),
+                Decision::Deny => HookOutput::deny(reason),
+            })
+        }
+        None => None,
+    }
+}
+
+/// Evaluate a file tool invocation against file config rules.
+///
+/// Flow: check files config → extract paths → fail-closed on empty → normalize
+/// → lookup per-path → aggregate → apply mode → build reason.
+fn evaluate_file_tool(input: &HookInput, config: &Config) -> Option<HookOutput> {
+    // No files config → no opinion on file tools (backwards compat)
+    let files_config = config.files.as_ref()?;
+
+    // Extract paths + operation
+    let (paths, operation) =
+        file_tools::extract_file_paths(&input.tool_name, &input.tool_input, &input.cwd)?;
+
+    // No paths extracted → fail-closed
+    if paths.is_empty() {
+        return Some(HookOutput::ask(format!(
+            "{APP_NAME}: no file path provided for {} tool",
+            input.tool_name
+        )));
+    }
+
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    // Per-path lookup
+    let per_path: Vec<Option<Decision>> = paths
+        .iter()
+        .map(|p| {
+            let normalized = crate::path::normalize(p, &input.cwd);
+            files_config.lookup(&normalized, operation, &input.cwd, &home)
+        })
+        .collect();
+
+    let aggregated = aggregate_decisions(&per_path);
+
+    match aggregated {
+        Some(decision) => {
+            let modified = apply_mode_modifier(decision.clone(), &input.permission_mode);
+            let op_str = operation_str(operation);
+            let reason = build_file_reason(&modified, &paths, &per_path, &decision, op_str);
             Some(match modified {
                 Decision::Allow => HookOutput::allow(reason),
                 Decision::Ask => HookOutput::ask(reason),
@@ -126,6 +173,66 @@ fn build_reason(
             }
         }
     }
+}
+
+/// Convert a FileOperation to its lowercase string for reason messages.
+fn operation_str(op: FileOperation) -> &'static str {
+    match op {
+        FileOperation::Read => "read",
+        FileOperation::Write => "write",
+        FileOperation::Edit => "edit",
+        FileOperation::Glob => "glob",
+        FileOperation::Grep => "grep",
+    }
+}
+
+/// Build a human-readable reason string for a file tool decision.
+fn build_file_reason(
+    modified: &Decision,
+    paths: &[String],
+    per_path: &[Option<Decision>],
+    pre_modifier: &Decision,
+    operation: &str,
+) -> String {
+    match modified {
+        Decision::Allow => {
+            format!("{APP_NAME}: allowed {operation} ({})", paths.join(", "))
+        }
+        Decision::Deny => {
+            let trigger = find_file_trigger(paths, per_path, pre_modifier);
+            let mode_converted = *pre_modifier != Decision::Deny;
+            if mode_converted {
+                format!("{APP_NAME}: '{trigger}' denied by dontAsk mode ({operation})")
+            } else {
+                format!("{APP_NAME}: '{trigger}' denied by file rules ({operation})")
+            }
+        }
+        Decision::Ask => {
+            let trigger = find_file_trigger(paths, per_path, pre_modifier);
+            format!("{APP_NAME}: '{trigger}' requires confirmation ({operation})")
+        }
+    }
+}
+
+/// Find the path that triggered the most restrictive file decision.
+fn find_file_trigger<'a>(
+    paths: &'a [String],
+    per_path: &[Option<Decision>],
+    target: &Decision,
+) -> &'a str {
+    for (path, dec) in paths.iter().zip(per_path.iter()) {
+        if dec.as_ref() == Some(target) {
+            return path;
+        }
+    }
+    if *target == Decision::Ask {
+        for (path, dec) in paths.iter().zip(per_path.iter()) {
+            if dec.is_none() {
+                return path;
+            }
+        }
+    }
+    &paths[0]
 }
 
 /// Find the program that triggered the most restrictive decision.

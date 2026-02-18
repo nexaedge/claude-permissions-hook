@@ -34,7 +34,11 @@ pub fn extract_file_paths(
 
     let paths = match op {
         FileOperation::Read | FileOperation::Write | FileOperation::Edit => {
-            match tool_input.get("file_path").and_then(Value::as_str) {
+            match tool_input
+                .get("file_path")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
                 Some(p) => vec![p.to_string()],
                 None => vec![],
             }
@@ -183,27 +187,27 @@ mod tests {
         assert_eq!(result, Some((vec![], FileOperation::Edit)));
     }
 
-    // ---- Empty-string edge cases ----
+    // ---- Empty-string edge cases (fail-closed: treat as missing) ----
 
     #[test]
-    fn read_empty_string_file_path_returns_empty_string() {
+    fn read_empty_string_file_path_returns_empty_vec() {
         let input = json!({"file_path": ""});
         let result = extract_file_paths("Read", &input, CWD);
-        assert_eq!(result, Some((vec!["".to_string()], FileOperation::Read)));
+        assert_eq!(result, Some((vec![], FileOperation::Read)));
     }
 
     #[test]
-    fn write_empty_string_file_path_returns_empty_string() {
+    fn write_empty_string_file_path_returns_empty_vec() {
         let input = json!({"file_path": ""});
         let result = extract_file_paths("Write", &input, CWD);
-        assert_eq!(result, Some((vec!["".to_string()], FileOperation::Write)));
+        assert_eq!(result, Some((vec![], FileOperation::Write)));
     }
 
     #[test]
-    fn edit_empty_string_file_path_returns_empty_string() {
+    fn edit_empty_string_file_path_returns_empty_vec() {
         let input = json!({"file_path": ""});
         let result = extract_file_paths("Edit", &input, CWD);
-        assert_eq!(result, Some((vec!["".to_string()], FileOperation::Edit)));
+        assert_eq!(result, Some((vec![], FileOperation::Edit)));
     }
 
     #[test]

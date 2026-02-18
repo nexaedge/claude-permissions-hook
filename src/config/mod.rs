@@ -18,7 +18,6 @@ use document::ConfigDocument;
 #[derive(Debug, Default)]
 pub struct Config {
     pub(crate) bash: Option<BashConfig>,
-    #[allow(dead_code)] // Read by decision engine in step 04
     pub(crate) files: Option<FilesConfig>,
 }
 
