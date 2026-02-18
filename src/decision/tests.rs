@@ -36,6 +36,7 @@ fn make_config(allow: &[&str], deny: &[&str], ask: &[&str]) -> Config {
             deny: rules_of(deny),
             ask: rules_of(ask),
         }),
+        ..Default::default()
     }
 }
 
@@ -469,6 +470,7 @@ fn config_with_conditional_rules(
 ) -> Config {
     Config {
         bash: Some(crate::config::BashConfig { allow, deny, ask }),
+        ..Default::default()
     }
 }
 

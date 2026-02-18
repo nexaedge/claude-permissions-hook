@@ -1,11 +1,13 @@
 pub(crate) mod bash;
 mod document;
+pub(crate) mod files;
 pub mod rule;
 pub(crate) mod section;
 
 use std::path::{Path, PathBuf};
 
 pub use bash::BashConfig;
+pub use files::FilesConfig;
 
 use document::ConfigDocument;
 
@@ -16,6 +18,8 @@ use document::ConfigDocument;
 #[derive(Debug, Default)]
 pub struct Config {
     pub(crate) bash: Option<BashConfig>,
+    #[allow(dead_code)] // Read by decision engine in step 04
+    pub(crate) files: Option<FilesConfig>,
 }
 
 /// Errors that can occur when loading or parsing a config file.
@@ -45,6 +49,7 @@ impl Config {
     fn from_document(doc: &ConfigDocument) -> Result<Self, ConfigError> {
         Ok(Config {
             bash: Some(section::parse_tool::<BashConfig>(doc)?),
+            files: files::parse_files(doc)?,
         })
     }
 }
@@ -203,7 +208,10 @@ mod tests {
     // --- Lookup tests ---
 
     fn config_with_bash(bash: BashConfig) -> Config {
-        Config { bash: Some(bash) }
+        Config {
+            bash: Some(bash),
+            ..Default::default()
+        }
     }
 
     #[test]
