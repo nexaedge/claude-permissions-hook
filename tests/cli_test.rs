@@ -525,6 +525,9 @@ arg_test!(edge_env_s_all_in_string,     cmd: r#"env -S "rm -rf /""#,    expect: 
 arg_test!(edge_env_split_string_equals, cmd: r#"env --split-string="rm -rf /""#, expect: "deny");
 arg_test!(edge_env_s_attached,          cmd: r#"env -S"rm -rf /""#,              expect: "deny");
 
+// env --split-string= with trailing args regression (delta review residual)
+arg_test!(edge_env_split_string_equals_trailing, cmd: "env --split-string=rm -rf /", expect: "deny");
+
 #[test]
 fn edge_empty_command() {
     let input = make_input_json("Bash", "default", serde_json::json!({"command": ""}));

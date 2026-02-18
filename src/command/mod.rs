@@ -695,6 +695,15 @@ mod tests {
         assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
     }
 
+    #[test]
+    fn env_split_string_equals_trailing_args() {
+        // `env --split-string=rm -rf /` — equals form with trailing args
+        let segs = parse("env --split-string=rm -rf /").unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
     // --- Arg extraction ---
 
     fn parse_segments(input: &str) -> Vec<CommandSegment> {
