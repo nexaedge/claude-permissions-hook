@@ -458,3 +458,58 @@ bash_decision_test!(wrapper_env_split_string_deny,
     cmd: r#"env -S "rm -rf /""#, mode: "default",
     allow: [], deny: ["rm"], ask: [],
     expect: Decision::Deny);
+
+// ---- Conditional rule fallthrough through evaluate() ----
+
+/// Build a Config with conditional rules for decision-layer tests.
+fn config_with_conditional_rules(
+    allow: Vec<crate::config::rule::BashRule>,
+    deny: Vec<crate::config::rule::BashRule>,
+    ask: Vec<crate::config::rule::BashRule>,
+) -> Config {
+    Config {
+        bash: Some(crate::config::BashConfig { allow, deny, ask }),
+    }
+}
+
+fn conditional_deny_rule(program: &str, flags: &[&str]) -> crate::config::rule::BashRule {
+    crate::config::rule::BashRule {
+        program: program.to_string(),
+        conditions: crate::config::rule::RuleConditions {
+            required_flags: flags.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        },
+    }
+}
+
+#[test]
+fn conditional_deny_miss_falls_through_to_allow() {
+    let config = config_with_conditional_rules(
+        rules_of(&["rm"]),                                // allow rm unconditionally
+        vec![conditional_deny_rule("rm", &["-r", "-f"])], // deny rm only with -r -f
+        vec![],
+    );
+    // rm file.txt — deny condition misses (no -r -f), allow matches → Allow
+    let input = bash_input("rm file.txt", "default");
+    let result = evaluate(&input, Some(&config)).unwrap();
+    assert_eq!(
+        result.hook_specific_output.permission_decision,
+        Decision::Allow
+    );
+}
+
+#[test]
+fn conditional_deny_miss_falls_through_to_ask() {
+    let config = config_with_conditional_rules(
+        vec![],
+        vec![conditional_deny_rule("rm", &["-r", "-f"])], // deny rm only with -r -f
+        rules_of(&["rm"]),                                // ask rm unconditionally
+    );
+    // rm file.txt — deny condition misses, ask matches → Ask
+    let input = bash_input("rm file.txt", "default");
+    let result = evaluate(&input, Some(&config)).unwrap();
+    assert_eq!(
+        result.hook_specific_output.permission_decision,
+        Decision::Ask
+    );
+}
