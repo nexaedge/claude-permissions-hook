@@ -272,6 +272,29 @@ fn consuming_options_for(wrapper_basename: &str) -> &'static [&'static str] {
 /// to extract the programs being executed (e.g., `env -S "echo hi"`).
 const SPLIT_STRING_OPTIONS: &[&str] = &["-S", "--split-string"];
 
+/// Extract an inline split-string payload from attached or equals forms.
+///
+/// Handles:
+/// - `--split-string=<value>` → `Some("<value>")`
+/// - `-S<value>` (attached, len > 2) → `Some("<value>")`
+///
+/// Returns `None` if the token is not an inline split-string form.
+fn extract_inline_split_string(text: &str) -> Option<String> {
+    // Long form: --split-string=<value>
+    if let Some(value) = text.strip_prefix("--split-string=") {
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    // Short form: -S<value> (attached, more than just "-S")
+    if let Some(value) = text.strip_prefix("-S") {
+        if !value.is_empty() && !value.starts_with(' ') {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 /// Strip matching outer quotes from a string.
 ///
 /// brush-parser stores Word.value as raw text including quotes. For `-S` arguments,
@@ -335,6 +358,18 @@ fn find_next_program<'a>(
             let text = word.flatten();
 
             if text.starts_with('-') {
+                // Check for split-string in attached/equals forms first.
+                // These embed the payload in the same token, so no skip_next needed.
+                if let Some(payload) = extract_inline_split_string(&text) {
+                    let unquoted = strip_outer_quotes(&payload);
+                    if let Ok(segments) = parse(&unquoted) {
+                        if !segments.is_empty() {
+                            return NextProgram::FromSplitString(segments);
+                        }
+                    }
+                    continue;
+                }
+
                 if consuming_options.iter().any(|opt| text == *opt) {
                     skip_next = true;
                     if SPLIT_STRING_OPTIONS.contains(&text.as_str()) {
@@ -635,6 +670,26 @@ mod tests {
     fn env_split_string_no_trailing_args_still_works() {
         // `env -S "rm -rf /"` — all args inside split string, nothing trailing
         let segs = parse(r#"env -S "rm -rf /""#).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    // --- env -S equals/attached forms ---
+
+    #[test]
+    fn env_split_string_equals_form() {
+        // `env --split-string="rm -rf /"` — equals form of --split-string
+        let segs = parse(r#"env --split-string="rm -rf /""#).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    #[test]
+    fn env_s_attached_form() {
+        // `env -S"rm -rf /"` — attached short form of -S
+        let segs = parse(r#"env -S"rm -rf /""#).unwrap();
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].program, "rm");
         assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);

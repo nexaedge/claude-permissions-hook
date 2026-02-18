@@ -521,6 +521,10 @@ arg_test_empty!(edge_no_matching_rule,  cmd: "python script.py");
 arg_test!(edge_env_s_trailing_args,     cmd: r#"env -S "rm" -r /"#,     expect: "deny");
 arg_test!(edge_env_s_all_in_string,     cmd: r#"env -S "rm -rf /""#,    expect: "deny");
 
+// env -S equals/attached form bypass fix (code review finding)
+arg_test!(edge_env_split_string_equals, cmd: r#"env --split-string="rm -rf /""#, expect: "deny");
+arg_test!(edge_env_s_attached,          cmd: r#"env -S"rm -rf /""#,              expect: "deny");
+
 #[test]
 fn edge_empty_command() {
     let input = make_input_json("Bash", "default", serde_json::json!({"command": ""}));
@@ -532,8 +536,10 @@ fn edge_empty_command() {
 
 #[test]
 fn edge_parse_error_command() {
-    let (stdout, exit_code) =
-        run_hook_with_config(&bash_input_json("git add . &&", "default"), &arg_matching_config());
+    let (stdout, exit_code) = run_hook_with_config(
+        &bash_input_json("git add . &&", "default"),
+        &arg_matching_config(),
+    );
     assert_eq!(exit_code, 0);
     let (decision, _) = parse_output(&stdout);
     assert_eq!(decision, "ask", "parse error should fail-closed to ask");
@@ -542,11 +548,16 @@ fn edge_parse_error_command() {
 #[test]
 fn edge_flag_expansion_r_space_f() {
     // `-r -f` should produce the same result as `-rf`
-    let (stdout, exit_code) =
-        run_hook_with_config(&bash_input_json("rm -r -f /", "default"), &arg_matching_config());
+    let (stdout, exit_code) = run_hook_with_config(
+        &bash_input_json("rm -r -f /", "default"),
+        &arg_matching_config(),
+    );
     assert_eq!(exit_code, 0);
     let (decision, _) = parse_output(&stdout);
-    assert_eq!(decision, "deny", "rm -r -f / should match the same as rm -rf /");
+    assert_eq!(
+        decision, "deny",
+        "rm -r -f / should match the same as rm -rf /"
+    );
 }
 
 // ---- Output structure validation ----
