@@ -106,7 +106,11 @@ fn collect_entries(kdl: &ConfigSection, tier: &str) -> Result<Vec<RuleEntry>, Co
                 .into_iter()
                 .map(|child| ChildNode {
                     name: child.name().to_string(),
-                    values: child.string_values().into_iter().map(String::from).collect(),
+                    values: child
+                        .string_values()
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
                     line: child.line(),
                 })
                 .collect()
@@ -129,6 +133,8 @@ fn collect_entries(kdl: &ConfigSection, tier: &str) -> Result<Vec<RuleEntry>, Co
 pub(super) fn parse_from_source(source: &str) -> Result<ToolSection, ConfigError> {
     let wrapped = format!("test {{\n{source}\n}}");
     let kdl = ConfigDocument::parse(&wrapped)?;
-    let section = kdl.section("test").expect("synthetic test section must exist");
+    let section = kdl
+        .section("test")
+        .expect("synthetic test section must exist");
     parse_section(&section)
 }

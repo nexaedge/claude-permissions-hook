@@ -53,8 +53,7 @@ pub fn evaluate(input: &HookInput, config: Option<&Config>) -> Option<HookOutput
 
     // Look up each command segment against bash config
     let bash = config.bash.as_ref()?;
-    let per_program: Vec<Option<Decision>> =
-        segments.iter().map(|seg| bash.lookup(seg)).collect();
+    let per_program: Vec<Option<Decision>> = segments.iter().map(|seg| bash.lookup(seg)).collect();
 
     // Aggregate decisions
     let aggregated = aggregate_decisions(&per_program);
