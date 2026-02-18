@@ -1,6 +1,6 @@
-## [0.3.0] - 2026-02-18
+## [0.4.0] - 2026-02-18
 
 ### Bug Fixes
 
-- use annotated tag in release workflow ([09df339](https://github.com/nexaedge/claude-permissions-hook/commit/09df339ec76b367c517dedbf0b5c18a22412956e))
+- remove status filter from release CI check ([04b4b00](https://github.com/nexaedge/claude-permissions-hook/commit/04b4b001054e0c7e3a22043a5d0076b2b1d2a7b1))
 
