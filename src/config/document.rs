@@ -106,6 +106,11 @@ impl<'a> ParseNode<'a> {
             .collect()
     }
 
+    /// Total number of entries (all types, not just strings).
+    pub(super) fn entry_count(&self) -> usize {
+        self.node.entries().len()
+    }
+
     /// Whether this node has a children block `{ … }`.
     pub(super) fn has_children(&self) -> bool {
         self.node.children().is_some()
