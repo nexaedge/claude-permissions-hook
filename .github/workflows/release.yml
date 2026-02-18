@@ -78,7 +78,7 @@ jobs:
         run: sed -i '3s/version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
 
       - name: Bump Cargo.lock
-        run: sed -i '224s/version = ".*"/version = "${{ inputs.version }}"/' Cargo.lock
+        run: sed -i '/^name = "claude-permissions-hook"$/{n;s/version = ".*"/version = "${{ inputs.version }}"/;}' Cargo.lock
 
       - name: Bump npm packages
         run: |
