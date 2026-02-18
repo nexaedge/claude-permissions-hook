@@ -33,21 +33,15 @@ impl ToolConfig for BashConfig {
 impl BashConfig {
     /// Look up a command segment and return its configured decision.
     ///
-    /// Normalizes paths to basenames: `/bin/rm` matches a `deny "rm"` rule.
+    /// Uses `BashRule::matches()` for full condition evaluation (program name,
+    /// flags, subcommands, positionals, required arguments).
     /// Precedence: deny > ask > allow. Returns `None` for unlisted programs.
-    ///
-    /// Currently matches on program name only. Full condition matching (flags,
-    /// positionals, subcommands) is implemented in Step 03.
     pub fn lookup(&self, segment: &CommandSegment) -> Option<Decision> {
-        let normalized = std::path::Path::new(&segment.program)
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or(&segment.program);
-        if self.deny.iter().any(|r| r.program == normalized) {
+        if self.deny.iter().any(|r| r.matches(segment)) {
             Some(Decision::Deny)
-        } else if self.ask.iter().any(|r| r.program == normalized) {
+        } else if self.ask.iter().any(|r| r.matches(segment)) {
             Some(Decision::Ask)
-        } else if self.allow.iter().any(|r| r.program == normalized) {
+        } else if self.allow.iter().any(|r| r.matches(segment)) {
             Some(Decision::Allow)
         } else {
             None
@@ -141,9 +135,7 @@ fn parse_children(
         let line = child.line;
         let glob_at_line = |msg: String| ConfigError::ParseError(format!("line {line}: {msg}"));
         let err_at_line = |e: ConfigError| match e {
-            ConfigError::ParseError(msg) => {
-                ConfigError::ParseError(format!("line {line}: {msg}"))
-            }
+            ConfigError::ParseError(msg) => ConfigError::ParseError(format!("line {line}: {msg}")),
             other => other,
         };
 
