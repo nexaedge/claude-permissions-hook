@@ -517,6 +517,10 @@ arg_test!(edge_flags_only_rule,         cmd: "rm -rf /anything",        expect: 
 arg_test!(edge_env_var_rm_rf,           cmd: "ENV=val rm -rf /",        expect: "deny");
 arg_test_empty!(edge_no_matching_rule,  cmd: "python script.py");
 
+// env -S trailing args bypass fix (sub-task 9b)
+arg_test!(edge_env_s_trailing_args,     cmd: r#"env -S "rm" -r /"#,     expect: "deny");
+arg_test!(edge_env_s_all_in_string,     cmd: r#"env -S "rm -rf /""#,    expect: "deny");
+
 #[test]
 fn edge_empty_command() {
     let input = make_input_json("Bash", "default", serde_json::json!({"command": ""}));

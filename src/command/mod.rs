@@ -196,8 +196,17 @@ fn extract_wrapped_programs(
                 });
                 break;
             }
-            NextProgram::FromSplitString(segments) => {
-                // Programs extracted from a -S command string
+            NextProgram::FromSplitString(mut segments) => {
+                // Programs extracted from a -S command string.
+                // Collect remaining suffix args (after the -S value) and append
+                // them to the last segment — they are additional args to the
+                // command specified in the split string.
+                let trailing = collect_remaining_args(&mut items);
+                if !trailing.is_empty() {
+                    if let Some(last) = segments.last_mut() {
+                        last.args.extend(trailing);
+                    }
+                }
                 result.extend(segments);
                 break;
             }
@@ -600,6 +609,35 @@ mod tests {
     #[test]
     fn env_split_string_with_other_options() {
         assert_eq!(programs(r#"env -i -u PATH -S "rm -rf /""#), vec!["rm"]);
+    }
+
+    // --- env -S trailing args ---
+
+    #[test]
+    fn env_split_string_trailing_args_appended() {
+        // `env -S "rm" -r /` should produce program "rm" with args ["-r", "/"]
+        let segs = parse(r#"env -S "rm" -r /"#).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "/"]);
+    }
+
+    #[test]
+    fn env_split_string_trailing_args_with_flags() {
+        // `env -S "rm -rf" /tmp` should produce program "rm" with args ["-r", "-f", "/tmp"]
+        let segs = parse(r#"env -S "rm -rf" /tmp"#).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/tmp"]);
+    }
+
+    #[test]
+    fn env_split_string_no_trailing_args_still_works() {
+        // `env -S "rm -rf /"` — all args inside split string, nothing trailing
+        let segs = parse(r#"env -S "rm -rf /""#).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
     }
 
     // --- Arg extraction ---
