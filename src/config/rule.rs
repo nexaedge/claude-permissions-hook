@@ -1008,16 +1008,16 @@ mod tests {
     }
 
     // --- Group 14: Rule String Subcommand + Children Subcommands (Both Set → AND) ---
+    //
+    // When both `subcommand` (from inline rule string) and `subcommands` (from children block)
+    // are set, both conditions must pass (AND). Both operate on the same positional arg list.
+    // In practice this combination is unusual — the spec calls it "confusing". These tests
+    // verify the AND semantics at the matching level. See mod.rs for e2e parser tests.
 
     #[test]
     fn match_inline_subcommand_and_children_subcommands_both_pass() {
-        // Rule has subcommand ["push"] from inline AND subcommands [["origin"]] from children
-        // Both must match — actual non-flag args must start with "push" AND start with "origin"
-        // Since subcommand checks ordered prefix and subcommands also checks ordered prefix,
-        // "push origin main" → subcommand ["push"] matches prefix, subcommands [["origin"]]...
-        // Wait — subcommands also works on the full positional list, so "push" won't match ["origin"]
-        // unless the positionals are ["push", "origin", "main"] and the chain is ["origin"].
-        // Actually this combination is unusual and "confusing" per spec — let's verify the AND behavior.
+        // subcommand: ["push"], subcommands: [["push", "origin"]]
+        // Actual: "push origin main" → subcommand prefix ["push"] ✓, chain ["push","origin"] ✓
         let r = BashRule {
             program: "git".to_string(),
             conditions: RuleConditions {
@@ -1026,13 +1026,12 @@ mod tests {
                 ..Default::default()
             },
         };
-        // "push origin main" → subcommand_matches: positionals start with ["push"] ✓
-        //                    → subcommands_match: positionals start with ["push", "origin"] ✓
         assert!(r.matches(&seg("git", &["push", "origin", "main"])));
     }
 
     #[test]
     fn no_match_inline_subcommand_ok_children_subcommands_miss() {
+        // subcommand: ["push"] ✓, subcommands: [["push","origin"]] ✗ (upstream ≠ origin)
         let r = BashRule {
             program: "git".to_string(),
             conditions: RuleConditions {
@@ -1041,13 +1040,12 @@ mod tests {
                 ..Default::default()
             },
         };
-        // "push upstream main" → subcommand_matches: ["push"] ✓
-        //                      → subcommands_match: ["push", "origin"] ✗ ("upstream" ≠ "origin")
         assert!(!r.matches(&seg("git", &["push", "upstream", "main"])));
     }
 
     #[test]
     fn no_match_children_subcommands_ok_inline_subcommand_miss() {
+        // subcommand: ["push"] ✗ (pull ≠ push), subcommands: [["pull"]] would pass but moot
         let r = BashRule {
             program: "git".to_string(),
             conditions: RuleConditions {
@@ -1056,7 +1054,6 @@ mod tests {
                 ..Default::default()
             },
         };
-        // "pull origin" → subcommand_matches: ["push"] ✗ ("pull" ≠ "push")
         assert!(!r.matches(&seg("git", &["pull", "origin"])));
     }
 }

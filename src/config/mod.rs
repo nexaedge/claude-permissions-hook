@@ -704,10 +704,7 @@ mod tests {
             allow: vec![rule_with_subcommands("git", &[&["status"]])],
             ..Default::default()
         });
-        assert_eq!(
-            bash(&config).lookup(&seg_with_args("git", &["push"])),
-            None
-        );
+        assert_eq!(bash(&config).lookup(&seg_with_args("git", &["push"])), None);
     }
 
     #[test]
@@ -877,10 +874,7 @@ mod tests {
             Some(Decision::Allow)
         );
         assert_eq!(b.lookup(&seg_with_args("claude", &["config"])), None);
-        assert_eq!(
-            b.lookup(&seg_with_args("claude", &["mcp", "server"])),
-            None
-        );
+        assert_eq!(b.lookup(&seg_with_args("claude", &["mcp", "server"])), None);
     }
 
     #[test]
@@ -935,6 +929,63 @@ mod tests {
             b.lookup(&seg_with_args("git", &["push", "upstream"])),
             Some(Decision::Allow)
         );
+    }
+
+    #[test]
+    fn e2e_inline_subcommand_with_children_subcommands() {
+        // Spec notes this combo is "confusing" — prefer one or the other.
+        // Parser sets inline args → subcommand, children → subcommands.
+        // Matching ANDs both: inline prefix AND children chain must match.
+        // "git push" { subcommands "origin" } → subcommand=["push"], subcommands=[["origin"]]
+        // subcommand requires positionals[0]=="push", subcommands requires positionals[0]=="origin"
+        // → effectively unsatisfiable.
+        let config = Config::parse(
+            r#"
+            bash {
+                allow "git push" {
+                    subcommands "origin"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let b = bash(&config);
+        // Verify parser shape
+        assert_eq!(b.allow[0].conditions.subcommand, vec!["push"]);
+        assert_eq!(b.allow[0].conditions.subcommands, vec![vec!["origin"]]);
+        // Unsatisfiable: both can't pass simultaneously
+        assert_eq!(b.lookup(&seg_with_args("git", &["push", "origin"])), None);
+        assert_eq!(b.lookup(&seg_with_args("git", &["origin", "push"])), None);
+    }
+
+    #[test]
+    fn e2e_inline_subcommand_with_children_subcommands_aligned() {
+        // When inline and children share the same prefix, it CAN match.
+        // "git push" { subcommands "push origin" }
+        // → subcommand=["push"], subcommands=[["push","origin"]]
+        let config = Config::parse(
+            r#"
+            bash {
+                allow "git push" {
+                    subcommands "push origin"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let b = bash(&config);
+        assert_eq!(b.allow[0].conditions.subcommand, vec!["push"]);
+        assert_eq!(
+            b.allow[0].conditions.subcommands,
+            vec![vec!["push", "origin"]]
+        );
+        // Satisfiable when aligned
+        assert_eq!(
+            b.lookup(&seg_with_args("git", &["push", "origin", "main"])),
+            Some(Decision::Allow)
+        );
+        // Fails children subcommands
+        assert_eq!(b.lookup(&seg_with_args("git", &["push", "upstream"])), None);
     }
 
     #[test]
