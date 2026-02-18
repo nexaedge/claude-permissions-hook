@@ -4,6 +4,7 @@ use brush_parser::ast;
 #[derive(Debug, PartialEq)]
 pub struct CommandSegment {
     pub program: String,
+    pub args: Vec<String>,
 }
 
 /// Error returned when a command string cannot be parsed.
@@ -34,6 +35,28 @@ pub fn parse(command: &str) -> Result<Vec<CommandSegment>, ParseError> {
     let mut segments = Vec::new();
     visit_program(&program, &mut segments);
     Ok(segments)
+}
+
+/// Expand combined short flags into individual flags.
+///
+/// `-rf` → `["-r", "-f"]`. Long flags (`--force`), single short flags (`-v`),
+/// positionals, bare `-`, `--`, and flags with `=` are returned unchanged.
+pub fn expand_flags(arg: &str) -> Vec<String> {
+    if !arg.starts_with('-')
+        || arg == "-"
+        || arg == "--"
+        || arg.starts_with("--")
+        || arg.contains('=')
+    {
+        return vec![arg.to_string()];
+    }
+    // Single short flag: -v (exactly 2 chars)
+    let chars: Vec<char> = arg[1..].chars().collect();
+    if chars.len() == 1 {
+        return vec![arg.to_string()];
+    }
+    // Combined short flags: -rf → ["-r", "-f"]
+    chars.iter().map(|c| format!("-{c}")).collect()
 }
 
 fn visit_program(program: &ast::Program, segments: &mut Vec<CommandSegment>) {
@@ -93,7 +116,11 @@ fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
                     }
 
                     // Not a wrapper (or wrapper with no arguments) — emit as-is
-                    segments.push(CommandSegment { program: name });
+                    let args = extract_args_from_suffix(&simple.suffix);
+                    segments.push(CommandSegment {
+                        program: name,
+                        args,
+                    });
                 }
             }
         }
@@ -101,6 +128,37 @@ fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
         ast::Command::Function(func) => visit_compound(&func.body.0, segments),
         ast::Command::ExtendedTest(_) => {} // [[ ]] doesn't execute programs
     }
+}
+
+/// Extract arguments from a command suffix, applying flag expansion.
+///
+/// Iterates suffix items, skips I/O redirections, assignment words, and process
+/// substitutions. For each `Word` item, flattens it to a string and applies
+/// `expand_flags()` to normalize combined short flags. After encountering `--`,
+/// all subsequent tokens are treated as positionals (no expansion).
+fn extract_args_from_suffix(suffix: &Option<ast::CommandSuffix>) -> Vec<String> {
+    let Some(suffix) = suffix else {
+        return vec![];
+    };
+    let mut args = Vec::new();
+    let mut end_of_options = false;
+    for item in &suffix.0 {
+        if let ast::CommandPrefixOrSuffixItem::Word(word) = item {
+            let text = word.flatten();
+            if text == "--" {
+                end_of_options = true;
+                args.push(text);
+                continue;
+            }
+            if end_of_options {
+                args.push(text);
+            } else {
+                args.extend(expand_flags(&text));
+            }
+        }
+        // IoRedirect, AssignmentWord, ProcessSubstitution — skip
+    }
+    args
 }
 
 /// Walk suffix arguments to find the actual program(s) behind wrapper commands.
@@ -130,12 +188,25 @@ fn extract_wrapped_programs(
                     current_wrapper = basename.to_string();
                     continue;
                 }
-                // Found the actual target program
-                result.push(CommandSegment { program: prog });
+                // Found the actual target program — collect remaining items as args
+                let args = collect_remaining_args(&mut items);
+                result.push(CommandSegment {
+                    program: prog,
+                    args,
+                });
                 break;
             }
-            NextProgram::FromSplitString(segments) => {
-                // Programs extracted from a -S command string
+            NextProgram::FromSplitString(mut segments) => {
+                // Programs extracted from a -S command string.
+                // Collect remaining suffix args (after the -S value) and append
+                // them to the last segment — they are additional args to the
+                // command specified in the split string.
+                let trailing = collect_remaining_args(&mut items);
+                if !trailing.is_empty() {
+                    if let Some(last) = segments.last_mut() {
+                        last.args.extend(trailing);
+                    }
+                }
                 result.extend(segments);
                 break;
             }
@@ -144,6 +215,34 @@ fn extract_wrapped_programs(
     }
 
     result
+}
+
+/// Collect remaining suffix items as args, applying flag expansion.
+///
+/// Used after the target program has been identified in wrapper unwrapping.
+/// Skips IoRedirect, AssignmentWord, and ProcessSubstitution items.
+/// After encountering `--`, all subsequent tokens are treated as positionals.
+fn collect_remaining_args<'a>(
+    items: &mut impl Iterator<Item = &'a ast::CommandPrefixOrSuffixItem>,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut end_of_options = false;
+    for item in items {
+        if let ast::CommandPrefixOrSuffixItem::Word(word) = item {
+            let text = word.flatten();
+            if text == "--" {
+                end_of_options = true;
+                args.push(text);
+                continue;
+            }
+            if end_of_options {
+                args.push(text);
+            } else {
+                args.extend(expand_flags(&text));
+            }
+        }
+    }
+    args
 }
 
 /// Known short/long options that consume a following separate argument for each wrapper.
@@ -172,6 +271,29 @@ fn consuming_options_for(wrapper_basename: &str) -> &'static [&'static str] {
 /// Options whose consumed argument is a shell command string that should be parsed
 /// to extract the programs being executed (e.g., `env -S "echo hi"`).
 const SPLIT_STRING_OPTIONS: &[&str] = &["-S", "--split-string"];
+
+/// Extract an inline split-string payload from attached or equals forms.
+///
+/// Handles:
+/// - `--split-string=<value>` → `Some("<value>")`
+/// - `-S<value>` (attached, len > 2) → `Some("<value>")`
+///
+/// Returns `None` if the token is not an inline split-string form.
+fn extract_inline_split_string(text: &str) -> Option<String> {
+    // Long form: --split-string=<value>
+    if let Some(value) = text.strip_prefix("--split-string=") {
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    // Short form: -S<value> (attached, more than just "-S")
+    if let Some(value) = text.strip_prefix("-S") {
+        if !value.is_empty() && !value.starts_with(' ') {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
 
 /// Strip matching outer quotes from a string.
 ///
@@ -236,6 +358,18 @@ fn find_next_program<'a>(
             let text = word.flatten();
 
             if text.starts_with('-') {
+                // Check for split-string in attached/equals forms first.
+                // These embed the payload in the same token, so no skip_next needed.
+                if let Some(payload) = extract_inline_split_string(&text) {
+                    let unquoted = strip_outer_quotes(&payload);
+                    if let Ok(segments) = parse(&unquoted) {
+                        if !segments.is_empty() {
+                            return NextProgram::FromSplitString(segments);
+                        }
+                    }
+                    continue;
+                }
+
                 if consuming_options.iter().any(|opt| text == *opt) {
                     skip_next = true;
                     if SPLIT_STRING_OPTIONS.contains(&text.as_str()) {
@@ -510,5 +644,196 @@ mod tests {
     #[test]
     fn env_split_string_with_other_options() {
         assert_eq!(programs(r#"env -i -u PATH -S "rm -rf /""#), vec!["rm"]);
+    }
+
+    // --- env -S trailing args ---
+
+    #[test]
+    fn env_split_string_trailing_args_appended() {
+        // `env -S "rm" -r /` should produce program "rm" with args ["-r", "/"]
+        let segs = parse(r#"env -S "rm" -r /"#).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "/"]);
+    }
+
+    #[test]
+    fn env_split_string_trailing_args_with_flags() {
+        // `env -S "rm -rf" /tmp` should produce program "rm" with args ["-r", "-f", "/tmp"]
+        let segs = parse(r#"env -S "rm -rf" /tmp"#).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/tmp"]);
+    }
+
+    #[test]
+    fn env_split_string_no_trailing_args_still_works() {
+        // `env -S "rm -rf /"` — all args inside split string, nothing trailing
+        let segs = parse(r#"env -S "rm -rf /""#).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    // --- env -S equals/attached forms ---
+
+    #[test]
+    fn env_split_string_equals_form() {
+        // `env --split-string="rm -rf /"` — equals form of --split-string
+        let segs = parse(r#"env --split-string="rm -rf /""#).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    #[test]
+    fn env_s_attached_form() {
+        // `env -S"rm -rf /"` — attached short form of -S
+        let segs = parse(r#"env -S"rm -rf /""#).unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    #[test]
+    fn env_split_string_equals_trailing_args() {
+        // `env --split-string=rm -rf /` — equals form with trailing args
+        let segs = parse("env --split-string=rm -rf /").unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    // --- Arg extraction ---
+
+    fn parse_segments(input: &str) -> Vec<CommandSegment> {
+        parse(input).expect("parse should succeed")
+    }
+
+    #[test]
+    fn args_simple_subcommand() {
+        let segs = parse_segments("git status");
+        assert_eq!(segs[0].program, "git");
+        assert_eq!(segs[0].args, vec!["status"]);
+    }
+
+    #[test]
+    fn args_flag_expansion() {
+        let segs = parse_segments("rm -rf /");
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    #[test]
+    fn args_long_flag_and_positionals() {
+        let segs = parse_segments("git push --force origin main");
+        assert_eq!(segs[0].program, "git");
+        assert_eq!(segs[0].args, vec!["push", "--force", "origin", "main"]);
+    }
+
+    #[test]
+    fn args_pipe_each_segment_has_own_args() {
+        let segs = parse_segments("ls -la | grep foo");
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].program, "ls");
+        assert_eq!(segs[0].args, vec!["-l", "-a"]);
+        assert_eq!(segs[1].program, "grep");
+        assert_eq!(segs[1].args, vec!["foo"]);
+    }
+
+    #[test]
+    fn args_env_var_excluded() {
+        let segs = parse_segments("ENV=val git status");
+        assert_eq!(segs[0].program, "git");
+        assert_eq!(segs[0].args, vec!["status"]);
+    }
+
+    #[test]
+    fn args_redirection_excluded() {
+        let segs = parse_segments("git log > file");
+        assert_eq!(segs[0].program, "git");
+        assert_eq!(segs[0].args, vec!["log"]);
+    }
+
+    #[test]
+    fn args_double_dash_stops_flag_expansion() {
+        let segs = parse_segments("rm -- -rf /tmp");
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["--", "-rf", "/tmp"]);
+    }
+
+    // --- Wrapper arg forwarding ---
+
+    #[test]
+    fn wrapper_command_forwards_args() {
+        let segs = parse_segments("command rm -rf /");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    #[test]
+    fn wrapper_env_forwards_args() {
+        let segs = parse_segments("env rm -rf /");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["-r", "-f", "/"]);
+    }
+
+    #[test]
+    fn wrapper_nohup_forwards_args() {
+        let segs = parse_segments("nohup git push --force");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].program, "git");
+        assert_eq!(segs[0].args, vec!["push", "--force"]);
+    }
+
+    #[test]
+    fn wrapper_double_dash_stops_flag_expansion() {
+        let segs = parse_segments("command rm -- -rf /tmp");
+        assert_eq!(segs[0].program, "rm");
+        assert_eq!(segs[0].args, vec!["--", "-rf", "/tmp"]);
+    }
+
+    // --- Flag expansion ---
+
+    #[test]
+    fn expand_flags_combined_short_flags() {
+        assert_eq!(expand_flags("-rf"), vec!["-r", "-f"]);
+    }
+
+    #[test]
+    fn expand_flags_long_flag_unchanged() {
+        assert_eq!(expand_flags("--force"), vec!["--force"]);
+    }
+
+    #[test]
+    fn expand_flags_single_short_flag_unchanged() {
+        assert_eq!(expand_flags("-v"), vec!["-v"]);
+    }
+
+    #[test]
+    fn expand_flags_positional_unchanged() {
+        assert_eq!(expand_flags("filename"), vec!["filename"]);
+    }
+
+    #[test]
+    fn expand_flags_bare_dash_unchanged() {
+        assert_eq!(expand_flags("-"), vec!["-"]);
+    }
+
+    #[test]
+    fn expand_flags_double_dash_unchanged() {
+        assert_eq!(expand_flags("--"), vec!["--"]);
+    }
+
+    #[test]
+    fn expand_flags_with_equals_unchanged() {
+        assert_eq!(expand_flags("-rf=value"), vec!["-rf=value"]);
+    }
+
+    #[test]
+    fn expand_flags_three_chars() {
+        assert_eq!(expand_flags("-rvf"), vec!["-r", "-v", "-f"]);
     }
 }
