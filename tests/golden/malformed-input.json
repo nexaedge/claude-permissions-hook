@@ -1,0 +1,16 @@
+{
+  "config": null,
+  "description": "Malformed JSON input: fails closed to ask",
+  "expected_output": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "ask",
+      "permissionDecisionReason": "Error: expected ident at line 1 column 2"
+    }
+  },
+  "input": "this is not json at all",
+  "tags": [
+    "error",
+    "fail-closed"
+  ]
+}

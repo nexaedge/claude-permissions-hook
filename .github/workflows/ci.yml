@@ -83,7 +83,13 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Tests
+      - name: Contract tests
+        run: cargo nextest run --profile ci -E 'binary(cli_contract)'
+
+      - name: Golden replay
+        run: cargo nextest run --profile ci -E 'binary(diff_harness)'
+
+      - name: All tests
         run: cargo nextest run --profile ci
 
       - name: Upload test results

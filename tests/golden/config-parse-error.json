@@ -1,0 +1,28 @@
+{
+  "config": "invalid {{ kdl {{ syntax",
+  "description": "Invalid KDL config: fails closed to ask",
+  "expected_output": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "ask",
+      "permissionDecisionReason": "Config error: invalid KDL syntax: Failed to parse KDL document"
+    }
+  },
+  "input": {
+    "cwd": "/tmp/test",
+    "hook_event_name": "PreToolUse",
+    "permission_mode": "default",
+    "session_id": "sess-e2e-test",
+    "tool_input": {
+      "command": "git status"
+    },
+    "tool_name": "Bash",
+    "tool_use_id": "toolu_e2e",
+    "transcript_path": "/tmp/transcript.json"
+  },
+  "tags": [
+    "error",
+    "fail-closed",
+    "config"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "config": "\nbash { allow \"git\"; deny \"rm\"; ask \"docker\"; }\nfiles {\n    deny \"~/.ssh/**\" \"read\" \"write\" \"edit\"\n    \"<cwd>/**\" {\n        allow \"read\" \"glob\" \"grep\"\n        ask \"write\" \"edit\"\n    }\n}\n",
+  "description": "Write in CWD: ask by file config tier ordering",
+  "expected_output": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "ask",
+      "permissionDecisionReason": "claude-permissions-hook: '/tmp/test/new.rs' requires confirmation (write)"
+    }
+  },
+  "input": {
+    "cwd": "/tmp/test",
+    "hook_event_name": "PreToolUse",
+    "permission_mode": "default",
+    "session_id": "sess-e2e-test",
+    "tool_input": {
+      "content": "data",
+      "file_path": "/tmp/test/new.rs"
+    },
+    "tool_name": "Write",
+    "tool_use_id": "toolu_e2e",
+    "transcript_path": "/tmp/transcript.json"
+  },
+  "tags": [
+    "file",
+    "write",
+    "ask"
+  ]
+}

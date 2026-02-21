@@ -1,0 +1,28 @@
+{
+  "config": "bash { allow \"git\"; deny \"rm\"; ask \"docker\"; }",
+  "description": "dontAsk converts ask to deny",
+  "expected_output": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "deny",
+      "permissionDecisionReason": "claude-permissions-hook: 'docker' denied by dontAsk mode"
+    }
+  },
+  "input": {
+    "cwd": "/tmp/test",
+    "hook_event_name": "PreToolUse",
+    "permission_mode": "dontAsk",
+    "session_id": "sess-e2e-test",
+    "tool_input": {
+      "command": "docker run"
+    },
+    "tool_name": "Bash",
+    "tool_use_id": "toolu_e2e",
+    "transcript_path": "/tmp/transcript.json"
+  },
+  "tags": [
+    "bash",
+    "mode",
+    "dontask"
+  ]
+}

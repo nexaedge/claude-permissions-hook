@@ -1,0 +1,28 @@
+{
+  "config": "\nbash { allow \"git\"; deny \"rm\"; ask \"docker\"; }\nfiles {\n    deny \"~/.ssh/**\" \"read\" \"write\" \"edit\"\n    \"<cwd>/**\" {\n        allow \"read\" \"glob\" \"grep\"\n        ask \"write\" \"edit\"\n    }\n}\n",
+  "description": "Read file in CWD: allow by file config",
+  "expected_output": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "allow",
+      "permissionDecisionReason": "claude-permissions-hook: allowed read (/tmp/test/src/main.rs)"
+    }
+  },
+  "input": {
+    "cwd": "/tmp/test",
+    "hook_event_name": "PreToolUse",
+    "permission_mode": "default",
+    "session_id": "sess-e2e-test",
+    "tool_input": {
+      "file_path": "/tmp/test/src/main.rs"
+    },
+    "tool_name": "Read",
+    "tool_use_id": "toolu_e2e",
+    "transcript_path": "/tmp/transcript.json"
+  },
+  "tags": [
+    "file",
+    "read",
+    "allow"
+  ]
+}

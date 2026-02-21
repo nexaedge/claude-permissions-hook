@@ -1,0 +1,27 @@
+{
+  "config": "bash { allow \"git\"; deny \"rm\"; ask \"docker\"; }",
+  "description": "Bash deny: rm -rf / matches deny rule",
+  "expected_output": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "deny",
+      "permissionDecisionReason": "claude-permissions-hook: 'rm' is in your deny list"
+    }
+  },
+  "input": {
+    "cwd": "/tmp/test",
+    "hook_event_name": "PreToolUse",
+    "permission_mode": "default",
+    "session_id": "sess-e2e-test",
+    "tool_input": {
+      "command": "rm -rf /"
+    },
+    "tool_name": "Bash",
+    "tool_use_id": "toolu_e2e",
+    "transcript_path": "/tmp/transcript.json"
+  },
+  "tags": [
+    "bash",
+    "deny"
+  ]
+}

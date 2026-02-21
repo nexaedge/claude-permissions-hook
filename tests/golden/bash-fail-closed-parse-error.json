@@ -1,0 +1,28 @@
+{
+  "config": "bash { allow \"git\"; deny \"rm\"; ask \"docker\"; }",
+  "description": "Bash parse error: incomplete command fails closed to ask",
+  "expected_output": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "ask",
+      "permissionDecisionReason": "Failed to parse command: syntax error at end of input"
+    }
+  },
+  "input": {
+    "cwd": "/tmp/test",
+    "hook_event_name": "PreToolUse",
+    "permission_mode": "default",
+    "session_id": "sess-e2e-test",
+    "tool_input": {
+      "command": "git add . &&"
+    },
+    "tool_name": "Bash",
+    "tool_use_id": "toolu_e2e",
+    "transcript_path": "/tmp/transcript.json"
+  },
+  "tags": [
+    "bash",
+    "error",
+    "fail-closed"
+  ]
+}

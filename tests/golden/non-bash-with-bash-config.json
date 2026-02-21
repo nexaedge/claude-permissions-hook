@@ -1,0 +1,22 @@
+{
+  "config": "bash { allow \"git\"; deny \"rm\"; ask \"docker\"; }",
+  "description": "Non-bash tool with bash-only config: no opinion (empty JSON)",
+  "expected_output": {},
+  "input": {
+    "cwd": "/tmp/test",
+    "hook_event_name": "PreToolUse",
+    "permission_mode": "default",
+    "session_id": "sess-e2e-test",
+    "tool_input": {
+      "file_path": "/tmp/x"
+    },
+    "tool_name": "Read",
+    "tool_use_id": "toolu_e2e",
+    "transcript_path": "/tmp/transcript.json"
+  },
+  "tags": [
+    "file",
+    "unlisted",
+    "routing"
+  ]
+}
