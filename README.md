@@ -83,6 +83,38 @@ For chained commands (`&&`, `||`, `;`, `|`), the hook evaluates each program and
 
 Without a config (no `--config`, no env var, no default file), the hook returns `ask` for everything, prompting you to set up a config file.
 
+### Command-Wrapper Transparency
+
+The hook evaluates programs by their actual name, unwrapping a small set of transparent launchers automatically:
+
+| Transparent launchers |
+|---|
+| `command`, `env`, `nohup`, `exec`, `builtin` |
+
+For example, `env TERM=xterm git status` is evaluated as `git`, not `env`.
+
+**Limitation:** Launchers not in this list (e.g. `sudo`, `nice`, `time`, `xargs`) are evaluated as the program name itself — the wrapped target is not inspected.
+
+This means a config like:
+
+```kdl
+bash {
+    allow "sudo"
+    deny "rm"
+}
+```
+
+will **allow** `sudo rm -rf /` (evaluated as `sudo`, which is in the allow list) — the `deny "rm"` rule does not fire.
+
+**Guidance:** Avoid pairing `allow` rules on unlisted launchers with `deny` rules on their potential targets. Either deny the launcher itself, or add the target explicitly:
+
+```kdl
+bash {
+    deny "sudo"   # block sudo entirely
+    deny "rm"
+}
+```
+
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, running tests, and code style guidelines.
