@@ -1,10 +1,12 @@
 use brush_parser::ast;
 
+use crate::domain::ProgramName;
+
 /// A parsed segment of a shell command, representing one program invocation.
 #[derive(Debug, PartialEq)]
-pub struct CommandSegment {
-    pub program: String,
-    pub args: Vec<String>,
+pub(crate) struct CommandSegment {
+    pub(crate) program: ProgramName,
+    pub(crate) args: Vec<String>,
 }
 
 /// Error returned when a command string cannot be parsed.
@@ -19,7 +21,7 @@ pub struct ParseError(pub String);
 /// compound commands.
 ///
 /// Returns `Err` on parse failures so the caller can fail closed.
-pub fn parse(command: &str) -> Result<Vec<CommandSegment>, ParseError> {
+pub(crate) fn parse(command: &str) -> Result<Vec<CommandSegment>, ParseError> {
     if command.trim().is_empty() {
         return Ok(vec![]);
     }
@@ -41,7 +43,7 @@ pub fn parse(command: &str) -> Result<Vec<CommandSegment>, ParseError> {
 ///
 /// `-rf` → `["-r", "-f"]`. Long flags (`--force`), single short flags (`-v`),
 /// positionals, bare `-`, `--`, and flags with `=` are returned unchanged.
-pub fn expand_flags(arg: &str) -> Vec<String> {
+pub(crate) fn expand_flags(arg: &str) -> Vec<String> {
     if !arg.starts_with('-')
         || arg == "-"
         || arg == "--"
@@ -118,7 +120,7 @@ fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
                     // Not a wrapper (or wrapper with no arguments) — emit as-is
                     let args = extract_args_from_suffix(&simple.suffix);
                     segments.push(CommandSegment {
-                        program: name,
+                        program: ProgramName::new(&name),
                         args,
                     });
                 }
@@ -191,7 +193,7 @@ fn extract_wrapped_programs(
                 // Found the actual target program — collect remaining items as args
                 let args = collect_remaining_args(&mut items);
                 result.push(CommandSegment {
-                    program: prog,
+                    program: ProgramName::new(&prog),
                     args,
                 });
                 break;
@@ -441,7 +443,7 @@ mod tests {
         parse(input)
             .expect("parse should succeed")
             .into_iter()
-            .map(|s| s.program)
+            .map(|s| s.program.as_str().to_string())
             .collect()
     }
 
@@ -535,13 +537,15 @@ mod tests {
     // --- Absolute/relative path extraction ---
 
     #[test]
-    fn absolute_path_preserves_full_path() {
-        assert_eq!(programs("/bin/rm -rf /"), vec!["/bin/rm"]);
+    fn absolute_path_normalizes_to_basename() {
+        // ProgramName::new strips the path prefix so /bin/rm → "rm"
+        assert_eq!(programs("/bin/rm -rf /"), vec!["rm"]);
     }
 
     #[test]
-    fn relative_path_preserves_full_path() {
-        assert_eq!(programs("./scripts/deploy.sh"), vec!["./scripts/deploy.sh"]);
+    fn relative_path_normalizes_to_basename() {
+        // ProgramName::new strips the path prefix so ./scripts/deploy.sh → "deploy.sh"
+        assert_eq!(programs("./scripts/deploy.sh"), vec!["deploy.sh"]);
     }
 
     // --- Transparent wrapper unwrapping ---
