@@ -1,0 +1,21 @@
+{
+  "config": "bash { allow \"git\"; deny \"rm\"; ask \"docker\"; }",
+  "description": "Bash unlisted: python not in config returns empty JSON",
+  "expected_output": {},
+  "input": {
+    "cwd": "/tmp/test",
+    "hook_event_name": "PreToolUse",
+    "permission_mode": "default",
+    "session_id": "sess-e2e-test",
+    "tool_input": {
+      "command": "python script.py"
+    },
+    "tool_name": "Bash",
+    "tool_use_id": "toolu_e2e",
+    "transcript_path": "/tmp/transcript.json"
+  },
+  "tags": [
+    "bash",
+    "unlisted"
+  ]
+}

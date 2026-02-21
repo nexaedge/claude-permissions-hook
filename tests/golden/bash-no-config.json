@@ -1,0 +1,27 @@
+{
+  "config": null,
+  "description": "Bash without config: ask (no config = fail-closed)",
+  "expected_output": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "ask",
+      "permissionDecisionReason": "No config file provided — run with --config to enable rule-based decisions"
+    }
+  },
+  "input": {
+    "cwd": "/tmp/test",
+    "hook_event_name": "PreToolUse",
+    "permission_mode": "default",
+    "session_id": "sess-e2e-test",
+    "tool_input": {
+      "command": "ls -la"
+    },
+    "tool_name": "Bash",
+    "tool_use_id": "toolu_e2e",
+    "transcript_path": "/tmp/transcript.json"
+  },
+  "tags": [
+    "bash",
+    "no-config"
+  ]
+}

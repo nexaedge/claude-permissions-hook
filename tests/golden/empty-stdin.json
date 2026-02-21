@@ -1,0 +1,16 @@
+{
+  "config": null,
+  "description": "Empty stdin: fails closed to ask",
+  "expected_output": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "ask",
+      "permissionDecisionReason": "Error: EOF while parsing a value at line 1 column 0"
+    }
+  },
+  "input": "",
+  "tags": [
+    "error",
+    "fail-closed"
+  ]
+}
