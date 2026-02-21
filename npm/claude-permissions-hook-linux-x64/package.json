@@ -1,6 +1,6 @@
 {
   "name": "claude-permissions-hook-linux-x64",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Platform binary for claude-permissions-hook (Linux x64)",
   "license": "MIT",
   "repository": {

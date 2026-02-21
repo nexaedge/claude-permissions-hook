@@ -1,6 +1,6 @@
-## [0.4.0] - 2026-02-18
+## [0.5.0] - 2026-02-21
 
-### Bug Fixes
+### Other Changes
 
-- remove status filter from release CI check ([04b4b00](https://github.com/nexaedge/claude-permissions-hook/commit/04b4b001054e0c7e3a22043a5d0076b2b1d2a7b1))
+- Merge pull request #3 from nexaedge/plan/claude-permissions-hook/plan-005-architecture-refactor ([d50e0a7](https://github.com/nexaedge/claude-permissions-hook/commit/d50e0a72e843ad3126ca31c83f57321fc7476b01))
 
