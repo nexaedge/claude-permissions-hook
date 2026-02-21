@@ -45,6 +45,7 @@ commit_parsers = [
   { message = "^ci", group = "<!-- 5 -->Miscellaneous" },
   { message = "^test", group = "<!-- 5 -->Miscellaneous" },
   { message = "^release:", skip = true },
+  { message = "^Merge", skip = true },
   { message = ".*", group = "<!-- 9 -->Other Changes" },
 ]
 tag_pattern = "v[0-9].*"
