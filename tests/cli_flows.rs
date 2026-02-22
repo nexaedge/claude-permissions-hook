@@ -15,11 +15,9 @@ bash {
     ask "docker"
 }
 files {
-    deny "~/.ssh/**" "read" "write" "edit"
-    "<cwd>/**" {
-        allow "read" "glob" "grep"
-        ask "write" "edit"
-    }
+    deny "~/.ssh/**" { operations "read" "write" "edit" }
+    allow "<cwd>/**" { operations "read" "glob" "grep" }
+    ask "<cwd>/**" { operations "write" "edit" }
 }
 "#;
 
@@ -152,7 +150,7 @@ fn flow_home_unset_file_tool_returns_valid_json() {
     tmpfile
         .write_all(
             br#"files {
-    deny "~/.ssh/**" "read"
+    deny "~/.ssh/**" { operations "read" }
 }"#,
         )
         .expect("failed to write config");
@@ -182,7 +180,7 @@ fn flow_home_unset_file_tool_returns_valid_json() {
     assert_eq!(exit_code, 0, "binary must not panic; stderr: {stderr}");
     let value: serde_json::Value = serde_json::from_str(stdout.trim())
         .expect("stdout must be valid JSON even when $HOME is unset");
-    // Fail-closed: $HOME unset → home_expanded_pattern is Err → lookup returns Ask.
+    // Fail-closed: $HOME unset → path.expanded is Err → lookup returns Ask.
     // The deny rule `~/.ssh/**` has an unexpandable pattern, so any path lookup
     // must return Ask (not deny, not allow, not empty).
     let decision = value["hookSpecificOutput"]["permissionDecision"]

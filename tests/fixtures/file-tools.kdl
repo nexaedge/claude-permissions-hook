@@ -1,10 +1,8 @@
 files {
-    deny "~/.ssh/**" "read" "write" "edit"
-    deny "~/.env" "read" "write" "edit"
+    deny "~/.ssh/**" { operations "read" "write" "edit" }
+    deny "~/.env" { operations "read" "write" "edit" }
 
-    "<cwd>/**" {
-        allow "read" "write" "edit" "glob" "grep"
-    }
+    allow "<cwd>/**" { operations "read" "write" "edit" "glob" "grep" }
 
-    ask "/**" "write" "edit"
+    ask "/**" { operations "write" "edit" }
 }

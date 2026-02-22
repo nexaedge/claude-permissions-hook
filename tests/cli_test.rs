@@ -152,8 +152,8 @@ fn edge_flag_expansion_r_space_f() {
 fn ft_write_cwd_allow() {
     let config = r#"
         files {
-            deny "~/.ssh/**" "write"
-            "<cwd>/**" { allow "write" }
+            deny "~/.ssh/**" { operations "write" }
+            allow "<cwd>/**" { operations "write" }
         }
     "#;
     let input = make_input_json(
@@ -171,8 +171,8 @@ fn ft_write_cwd_allow() {
 fn ft_edit_cwd_allow() {
     let config = r#"
         files {
-            deny "~/.ssh/**" "edit"
-            "<cwd>/**" { allow "edit" }
+            deny "~/.ssh/**" { operations "edit" }
+            allow "<cwd>/**" { operations "edit" }
         }
     "#;
     let input = make_input_json(
@@ -191,7 +191,8 @@ fn ft_edit_cwd_allow() {
 // Files-only config + Bash tool → empty JSON (no bash section → no opinion)
 #[test]
 fn ft_compat_files_only_config_bash_tool() {
-    let files_only = r#"files { allow "/tmp/**" "read" "write" "edit" "glob" "grep" }"#;
+    let files_only =
+        r#"files { allow "/tmp/**" { operations "read" "write" "edit" "glob" "grep" } }"#;
     let (stdout, exit_code) =
         run_hook_with_config(&bash_input_json("git status", "default"), files_only);
     assert_eq!(exit_code, 0);
@@ -203,7 +204,7 @@ fn ft_compat_files_only_config_bash_tool() {
 fn ft_compat_mixed_config_bash_uses_bash_rules() {
     let mixed = r#"
         bash { allow "git"; deny "rm" }
-        files { allow "/tmp/**" "read" }
+        files { allow "/tmp/**" { operations "read" } }
     "#;
     let (stdout, exit_code) =
         run_hook_with_config(&bash_input_json("git status", "default"), mixed);
@@ -217,7 +218,7 @@ fn ft_compat_mixed_config_bash_uses_bash_rules() {
 fn ft_compat_mixed_config_file_uses_file_rules() {
     let mixed = r#"
         bash { allow "git"; deny "rm" }
-        files { allow "/tmp/**" "read" }
+        files { allow "/tmp/**" { operations "read" } }
     "#;
     let input = make_input_json(
         "Read",

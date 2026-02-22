@@ -1,5 +1,5 @@
 {
-  "config": "\nbash { allow \"git\"; deny \"rm\"; ask \"docker\"; }\nfiles {\n    deny \"~/.ssh/**\" \"read\" \"write\" \"edit\"\n    \"<cwd>/**\" {\n        allow \"read\" \"glob\" \"grep\"\n        ask \"write\" \"edit\"\n    }\n}\n",
+  "config": "\nbash { allow \"git\"; deny \"rm\"; ask \"docker\"; }\nfiles {\n    deny \"~/.ssh/**\" { operations \"read\" \"write\" \"edit\" }\n    allow \"<cwd>/**\" { operations \"read\" \"glob\" \"grep\" }\n    ask \"<cwd>/**\" { operations \"write\" \"edit\" }\n}\n",
   "description": "Read ~/.ssh: deny by file config",
   "expected_output": {
     "hookSpecificOutput": {
