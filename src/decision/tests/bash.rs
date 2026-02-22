@@ -1,4 +1,4 @@
-use super::{bash_input, make_config, make_input, rules_of};
+use super::{bash_input, make_config, make_input, rules_of_with_decision};
 use crate::config::Config;
 use crate::decision::evaluate;
 use crate::protocol::output::Decision;
@@ -269,21 +269,18 @@ bash_decision_test!(wrapper_env_split_string_deny,
 // ---- Conditional rule fallthrough through evaluate() ----
 
 /// Build a Config with conditional rules for decision-layer tests.
-fn config_with_conditional_rules(
-    allow: Vec<crate::config::rule::BashRule>,
-    deny: Vec<crate::config::rule::BashRule>,
-    ask: Vec<crate::config::rule::BashRule>,
-) -> Config {
+fn config_with_conditional_rules(rules: Vec<crate::config::rule::BashRule>) -> Config {
     Config {
-        bash: Some(crate::config::BashConfig { allow, deny, ask }),
+        bash: Some(rules),
         ..Default::default()
     }
 }
 
 fn conditional_deny_rule(program: &str, flags: &[&str]) -> crate::config::rule::BashRule {
     crate::config::rule::BashRule {
+        decision: Decision::Deny,
         program: crate::domain::ProgramName::new(program),
-        conditions: crate::config::rule::RuleConditions {
+        conditions: crate::config::rule::BashConditions {
             required_flags: flags.iter().map(|s| crate::domain::Flag::new(s)).collect(),
             ..Default::default()
         },
@@ -292,11 +289,9 @@ fn conditional_deny_rule(program: &str, flags: &[&str]) -> crate::config::rule::
 
 #[test]
 fn conditional_deny_miss_falls_through_to_allow() {
-    let config = config_with_conditional_rules(
-        rules_of(&["rm"]),                                // allow rm unconditionally
-        vec![conditional_deny_rule("rm", &["-r", "-f"])], // deny rm only with -r -f
-        vec![],
-    );
+    let mut rules = rules_of_with_decision(&["rm"], Decision::Allow);
+    rules.push(conditional_deny_rule("rm", &["-r", "-f"]));
+    let config = config_with_conditional_rules(rules);
     // rm file.txt — deny condition misses (no -r -f), allow matches → Allow
     let input = bash_input("rm file.txt", "default");
     let result = evaluate(&input, Some(&config)).unwrap();
@@ -308,11 +303,9 @@ fn conditional_deny_miss_falls_through_to_allow() {
 
 #[test]
 fn conditional_deny_miss_falls_through_to_ask() {
-    let config = config_with_conditional_rules(
-        vec![],
-        vec![conditional_deny_rule("rm", &["-r", "-f"])], // deny rm only with -r -f
-        rules_of(&["rm"]),                                // ask rm unconditionally
-    );
+    let mut rules = vec![conditional_deny_rule("rm", &["-r", "-f"])];
+    rules.extend(rules_of_with_decision(&["rm"], Decision::Ask));
+    let config = config_with_conditional_rules(rules);
     // rm file.txt — deny condition misses, ask matches → Ask
     let input = bash_input("rm file.txt", "default");
     let result = evaluate(&input, Some(&config)).unwrap();

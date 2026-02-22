@@ -1,9 +1,8 @@
 use super::{make_config, make_input};
-use crate::config::files::{FileRule, FilesConfig};
+use crate::config::files::{FileOperation, FileRule, FilesConfig, PathPattern};
 use crate::config::Config;
 use crate::decision::evaluate;
 use crate::protocol::output::Decision;
-use crate::protocol::FileOperation;
 use serde_json::json;
 use std::collections::HashSet;
 
@@ -15,14 +14,28 @@ fn make_files_config(files: FilesConfig) -> Config {
     }
 }
 
-/// Build a FileRule from a pattern and list of operations.
-fn file_rule(pattern: &str, ops: &[FileOperation]) -> FileRule {
+/// Build a FileRule from a pattern, decision, and list of operations.
+fn file_rule(pattern: &str, decision: Decision, ops: &[FileOperation]) -> FileRule {
     FileRule {
-        home_expanded_pattern: crate::config::normalize::files::expand_home(pattern),
-        raw_pattern: pattern.to_string(),
+        decision,
+        path: PathPattern {
+            raw: pattern.to_string(),
+            expanded: crate::config::normalize::files::expand_home(pattern),
+        },
         operations: ops.iter().copied().collect::<HashSet<_>>(),
-        line: 0,
     }
+}
+
+fn allow_rule(pattern: &str, ops: &[FileOperation]) -> FileRule {
+    file_rule(pattern, Decision::Allow, ops)
+}
+
+fn deny_rule(pattern: &str, ops: &[FileOperation]) -> FileRule {
+    file_rule(pattern, Decision::Deny, ops)
+}
+
+fn ask_rule(pattern: &str, ops: &[FileOperation]) -> FileRule {
+    file_rule(pattern, Decision::Ask, ops)
 }
 
 fn file_input(tool: &str, mode: &str, tool_input: serde_json::Value) -> crate::protocol::HookInput {
@@ -41,10 +54,7 @@ fn file_decision(input: &crate::protocol::HookInput, config: &Config) -> Decisio
 
 #[test]
 fn file_read_in_cwd_allow() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("<cwd>/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![allow_rule("<cwd>/**", &[FileOperation::Read])]);
     let input = file_input(
         "Read",
         "default",
@@ -58,10 +68,7 @@ fn file_read_in_cwd_allow() {
 #[test]
 fn file_write_to_denied_path() {
     let home = std::env::var("HOME").unwrap();
-    let config = make_files_config(FilesConfig {
-        deny: vec![file_rule("~/.ssh/**", &[FileOperation::Write])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![deny_rule("~/.ssh/**", &[FileOperation::Write])]);
     let input = file_input(
         "Write",
         "default",
@@ -74,11 +81,10 @@ fn file_write_to_denied_path() {
 
 #[test]
 fn file_edit_outside_cwd_ask() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("<cwd>/**", &[FileOperation::Edit])],
-        ask: vec![file_rule("/**", &[FileOperation::Edit])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![
+        allow_rule("<cwd>/**", &[FileOperation::Edit]),
+        ask_rule("/**", &[FileOperation::Edit]),
+    ]);
     // Path outside CWD (/home/user/project) → matches ask catch-all, not allow
     let input = file_input("Edit", "default", json!({"file_path": "/etc/hosts"}));
     assert_eq!(file_decision(&input, &config), Decision::Ask);
@@ -90,20 +96,17 @@ fn file_edit_outside_cwd_ask() {
 fn file_glob_no_path_defaults_to_cwd() {
     // Glob without path → extract_file_paths defaults to CWD (/home/user/project)
     // Pattern must match the directory itself (not just contents)
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("/home/user/project", &[FileOperation::Glob])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![allow_rule(
+        "/home/user/project",
+        &[FileOperation::Glob],
+    )]);
     let input = file_input("Glob", "default", json!({"pattern": "**/*.rs"}));
     assert_eq!(file_decision(&input, &config), Decision::Allow);
 }
 
 #[test]
 fn file_glob_explicit_path_inside_cwd() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("<cwd>/**", &[FileOperation::Glob])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![allow_rule("<cwd>/**", &[FileOperation::Glob])]);
     // Glob with explicit path inside CWD → matches <cwd>/**
     let input = file_input(
         "Glob",
@@ -117,10 +120,7 @@ fn file_glob_explicit_path_inside_cwd() {
 
 #[test]
 fn file_grep_explicit_path() {
-    let config = make_files_config(FilesConfig {
-        deny: vec![file_rule("/etc/**", &[FileOperation::Grep])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![deny_rule("/etc/**", &[FileOperation::Grep])]);
     let input = file_input(
         "Grep",
         "default",
@@ -143,22 +143,21 @@ fn file_no_files_config_returns_none() {
 
 #[test]
 fn file_deny_beats_ask_beats_allow() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("/**", &[FileOperation::Read])],
-        ask: vec![file_rule("/**", &[FileOperation::Read])],
-        deny: vec![file_rule("/**", &[FileOperation::Read])],
-    });
+    let config = make_files_config(vec![
+        allow_rule("/**", &[FileOperation::Read]),
+        ask_rule("/**", &[FileOperation::Read]),
+        deny_rule("/**", &[FileOperation::Read]),
+    ]);
     let input = file_input("Read", "default", json!({"file_path": "/any/path"}));
     assert_eq!(file_decision(&input, &config), Decision::Deny);
 }
 
 #[test]
 fn file_ask_beats_allow() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("/**", &[FileOperation::Write])],
-        ask: vec![file_rule("/**", &[FileOperation::Write])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![
+        allow_rule("/**", &[FileOperation::Write]),
+        ask_rule("/**", &[FileOperation::Write]),
+    ]);
     let input = file_input("Write", "default", json!({"file_path": "/any/path"}));
     assert_eq!(file_decision(&input, &config), Decision::Ask);
 }
@@ -167,10 +166,7 @@ fn file_ask_beats_allow() {
 
 #[test]
 fn file_bypass_mode_ask_to_allow() {
-    let config = make_files_config(FilesConfig {
-        ask: vec![file_rule("/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![ask_rule("/**", &[FileOperation::Read])]);
     let input = file_input(
         "Read",
         "bypassPermissions",
@@ -183,10 +179,7 @@ fn file_bypass_mode_ask_to_allow() {
 
 #[test]
 fn file_dont_ask_mode_ask_to_deny() {
-    let config = make_files_config(FilesConfig {
-        ask: vec![file_rule("/**", &[FileOperation::Write])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![ask_rule("/**", &[FileOperation::Write])]);
     let input = file_input("Write", "dontAsk", json!({"file_path": "/tmp/test.txt"}));
     assert_eq!(file_decision(&input, &config), Decision::Deny);
 }
@@ -195,10 +188,7 @@ fn file_dont_ask_mode_ask_to_deny() {
 
 #[test]
 fn file_missing_file_path_fail_closed() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![allow_rule("/**", &[FileOperation::Read])]);
     // Read with no file_path → empty paths → fail-closed ask
     let input = file_input("Read", "default", json!({}));
     assert_eq!(file_decision(&input, &config), Decision::Ask);
@@ -206,10 +196,7 @@ fn file_missing_file_path_fail_closed() {
 
 #[test]
 fn file_missing_file_path_write_fail_closed() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("/**", &[FileOperation::Write])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![allow_rule("/**", &[FileOperation::Write])]);
     let input = file_input("Write", "default", json!({}));
     assert_eq!(file_decision(&input, &config), Decision::Ask);
 }
@@ -218,10 +205,7 @@ fn file_missing_file_path_write_fail_closed() {
 
 #[test]
 fn file_operation_mismatch_returns_none() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![allow_rule("/**", &[FileOperation::Read])]);
     // Write tool but allow rule only has read → no match → None
     let input = file_input("Write", "default", json!({"file_path": "/tmp/test.txt"}));
     assert!(evaluate(&input, Some(&config)).is_none());
@@ -231,17 +215,14 @@ fn file_operation_mismatch_returns_none() {
 
 #[test]
 fn file_cwd_variable_expansion() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule(
-            "<cwd>/**",
-            &[
-                FileOperation::Read,
-                FileOperation::Write,
-                FileOperation::Edit,
-            ],
-        )],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![allow_rule(
+        "<cwd>/**",
+        &[
+            FileOperation::Read,
+            FileOperation::Write,
+            FileOperation::Edit,
+        ],
+    )]);
     let input = file_input(
         "Write",
         "default",
@@ -253,10 +234,7 @@ fn file_cwd_variable_expansion() {
 #[test]
 fn file_home_variable_expansion() {
     let home = std::env::var("HOME").unwrap();
-    let config = make_files_config(FilesConfig {
-        deny: vec![file_rule("<home>/.ssh/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![deny_rule("<home>/.ssh/**", &[FileOperation::Read])]);
     let input = file_input(
         "Read",
         "default",
@@ -268,10 +246,7 @@ fn file_home_variable_expansion() {
 #[test]
 fn file_tilde_expansion() {
     let home = std::env::var("HOME").unwrap();
-    let config = make_files_config(FilesConfig {
-        deny: vec![file_rule("~/.env", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![deny_rule("~/.env", &[FileOperation::Read])]);
     let input = file_input(
         "Read",
         "default",
@@ -284,10 +259,7 @@ fn file_tilde_expansion() {
 
 #[test]
 fn file_bypass_mode_allow_stays_allow() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![allow_rule("/**", &[FileOperation::Read])]);
     let input = file_input(
         "Read",
         "bypassPermissions",
@@ -298,10 +270,7 @@ fn file_bypass_mode_allow_stays_allow() {
 
 #[test]
 fn file_bypass_mode_deny_stays_deny() {
-    let config = make_files_config(FilesConfig {
-        deny: vec![file_rule("/**", &[FileOperation::Write])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![deny_rule("/**", &[FileOperation::Write])]);
     let input = file_input(
         "Write",
         "bypassPermissions",
@@ -312,10 +281,7 @@ fn file_bypass_mode_deny_stays_deny() {
 
 #[test]
 fn file_dont_ask_mode_deny_stays_deny() {
-    let config = make_files_config(FilesConfig {
-        deny: vec![file_rule("/**", &[FileOperation::Write])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![deny_rule("/**", &[FileOperation::Write])]);
     let input = file_input("Write", "dontAsk", json!({"file_path": "/tmp/test.txt"}));
     assert_eq!(file_decision(&input, &config), Decision::Deny);
 }
@@ -324,16 +290,10 @@ fn file_dont_ask_mode_deny_stays_deny() {
 
 #[test]
 fn file_config_with_both_bash_and_files() {
-    use super::rules_of;
+    use super::rules_of_with_decision;
     let config = Config {
-        bash: Some(crate::config::BashConfig {
-            allow: rules_of(&["git"]),
-            ..Default::default()
-        }),
-        files: Some(FilesConfig {
-            allow: vec![file_rule("<cwd>/**", &[FileOperation::Read])],
-            ..Default::default()
-        }),
+        bash: Some(rules_of_with_decision(&["git"], Decision::Allow)),
+        files: Some(vec![allow_rule("<cwd>/**", &[FileOperation::Read])]),
     };
     // Bash still evaluates independently
     let bash_in = super::bash_input("git status", "default");
@@ -357,10 +317,7 @@ fn file_config_with_both_bash_and_files() {
 
 #[test]
 fn unknown_tool_with_files_config_returns_none() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![allow_rule("/**", &[FileOperation::Read])]);
     let input = make_input("NotebookEdit", "default", json!({}));
     assert!(evaluate(&input, Some(&config)).is_none());
 }
@@ -369,10 +326,7 @@ fn unknown_tool_with_files_config_returns_none() {
 
 #[test]
 fn file_relative_path_normalized_to_cwd() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("<cwd>/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![allow_rule("<cwd>/**", &[FileOperation::Read])]);
     // file_path is relative (shouldn't happen in practice but verifies normalization)
     let input = file_input("Read", "default", json!({"file_path": "src/main.rs"}));
     // Normalized: /home/user/project/src/main.rs → matches <cwd>/**

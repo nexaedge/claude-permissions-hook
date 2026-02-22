@@ -4,7 +4,7 @@ mod files;
 mod reason;
 
 use crate::config::Config;
-use crate::protocol::{HookInput, HookOutput, ToolUse};
+use crate::protocol::{HookInput, HookOutput, ToolCategory, ToolUse};
 
 pub(crate) const APP_NAME: &str = "claude-permissions-hook";
 
@@ -14,8 +14,9 @@ pub(crate) const APP_NAME: &str = "claude-permissions-hook";
 /// programs/paths unlisted). Returns `Some(output)` with a concrete decision otherwise.
 ///
 /// - No config → `Some(Ask)` for all tools (user needs to set up config)
-/// - Bash tool → parse command, lookup programs, aggregate, apply mode
-/// - File tool (Read/Write/Edit/Glob/Grep) → extract paths, lookup against file rules
+/// - Bash tool → lookup programs, aggregate, apply mode
+/// - File tool (Read/Write/Edit/Glob/Grep) → lookup paths against file rules
+/// - Invalid tool input → `Some(Ask)` if relevant config exists (fail-closed)
 /// - Other tool → `None` (no opinion)
 ///
 /// # Examples
@@ -50,15 +51,29 @@ pub fn evaluate(input: &HookInput, config: Option<&Config>) -> Option<HookOutput
         }
     };
 
-    let tool_use = ToolUse::parse(&input.tool_name, &input.tool_input);
-    match &tool_use {
-        ToolUse::Bash { command } => bash::evaluate_bash(command.as_deref(), input, config),
-        ToolUse::Read { .. }
-        | ToolUse::Write { .. }
-        | ToolUse::Edit { .. }
-        | ToolUse::Glob { .. }
-        | ToolUse::Grep { .. } => files::evaluate_file_tool(&tool_use, input, config),
-        ToolUse::Unknown { .. } => None,
+    match &input.tool_use {
+        Ok(ToolUse::Bash(ref bash)) => bash::evaluate_bash(bash, input, config),
+        Ok(
+            ToolUse::Read(ref file)
+            | ToolUse::Write(ref file)
+            | ToolUse::Edit(ref file)
+            | ToolUse::Glob(ref file)
+            | ToolUse::Grep(ref file),
+        ) => files::evaluate_file_tool(input.tool_use.as_ref().unwrap(), file, input, config),
+        Ok(ToolUse::Unknown { .. }) => None,
+        // Fail-closed: invalid input for a known tool → ask, but only if we have
+        // config for that tool category. Without config, we have no opinion.
+        Err(err) => {
+            let has_config = match err.category {
+                ToolCategory::Bash => config.bash.is_some(),
+                ToolCategory::File => config.files.is_some(),
+            };
+            if has_config {
+                Some(HookOutput::ask(&err.reason))
+            } else {
+                None
+            }
+        }
     }
 }
 

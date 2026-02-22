@@ -25,23 +25,28 @@ fn bash_input(command: &str, mode: &str) -> HookInput {
     make_input("Bash", mode, json!({"command": command}))
 }
 
-fn rules_of(programs: &[&str]) -> Vec<crate::config::rule::BashRule> {
+fn rules_of_with_decision(
+    programs: &[&str],
+    decision: crate::protocol::Decision,
+) -> Vec<crate::config::rule::BashRule> {
     programs
         .iter()
         .map(|p| crate::config::rule::BashRule {
+            decision: decision.clone(),
             program: crate::domain::ProgramName::new(p),
-            conditions: crate::config::rule::RuleConditions::default(),
+            conditions: crate::config::rule::BashConditions::default(),
         })
         .collect()
 }
 
 fn make_config(allow: &[&str], deny: &[&str], ask: &[&str]) -> Config {
+    use crate::protocol::Decision;
+    let mut bash: crate::config::BashConfig = Vec::new();
+    bash.extend(rules_of_with_decision(allow, Decision::Allow));
+    bash.extend(rules_of_with_decision(deny, Decision::Deny));
+    bash.extend(rules_of_with_decision(ask, Decision::Ask));
     Config {
-        bash: Some(crate::config::BashConfig {
-            allow: rules_of(allow),
-            deny: rules_of(deny),
-            ask: rules_of(ask),
-        }),
+        bash: Some(bash),
         ..Default::default()
     }
 }

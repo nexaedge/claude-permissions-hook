@@ -1,5 +1,5 @@
+use crate::domain::FileOperation;
 use crate::protocol::output::Decision;
-use crate::protocol::FileOperation;
 
 use super::APP_NAME;
 
@@ -69,7 +69,7 @@ pub(crate) fn operation_str(op: FileOperation) -> &'static str {
 /// Build a human-readable reason string for a file tool decision.
 pub(crate) fn build_file_reason(
     modified: &Decision,
-    paths: &[String],
+    paths: &[&str],
     per_path: &[Option<Decision>],
     pre_modifier: &Decision,
     operation: &str,
@@ -96,7 +96,7 @@ pub(crate) fn build_file_reason(
 
 /// Find the path that triggered the most restrictive file decision.
 fn find_file_trigger<'a>(
-    paths: &'a [String],
+    paths: &[&'a str],
     per_path: &[Option<Decision>],
     target: &Decision,
 ) -> &'a str {
@@ -112,7 +112,7 @@ fn find_file_trigger<'a>(
             }
         }
     }
-    &paths[0]
+    paths[0]
 }
 
 /// Find the program that triggered the most restrictive decision.

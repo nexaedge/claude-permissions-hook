@@ -1,8 +1,8 @@
 use super::{bash_input, make_config, make_input};
-use crate::config::files::{FileRule, FilesConfig};
+use crate::config::files::{FileOperation, FileRule, FilesConfig, PathPattern};
 use crate::config::Config;
 use crate::decision::evaluate;
-use crate::protocol::FileOperation;
+use crate::protocol::output::Decision;
 use serde_json::json;
 use std::collections::HashSet;
 
@@ -14,13 +14,15 @@ fn reason_of(input: &crate::protocol::HookInput, config: &Config) -> String {
         .permission_decision_reason
 }
 
-/// Build a FileRule from a pattern and list of operations.
-fn file_rule(pattern: &str, ops: &[FileOperation]) -> FileRule {
+/// Build a FileRule from a pattern, decision, and list of operations.
+fn file_rule(pattern: &str, decision: Decision, ops: &[FileOperation]) -> FileRule {
     FileRule {
-        home_expanded_pattern: crate::config::normalize::files::expand_home(pattern),
-        raw_pattern: pattern.to_string(),
+        decision,
+        path: PathPattern {
+            raw: pattern.to_string(),
+            expanded: crate::config::normalize::files::expand_home(pattern),
+        },
         operations: ops.iter().copied().collect::<HashSet<_>>(),
-        line: 0,
     }
 }
 
@@ -161,10 +163,11 @@ fn reason_explicit_deny_not_affected_by_mode_text() {
 
 #[test]
 fn file_reason_allow() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![file_rule(
+        "/**",
+        Decision::Allow,
+        &[FileOperation::Read],
+    )]);
     let input = file_input("Read", "default", json!({"file_path": "/tmp/test.txt"}));
     assert_eq!(
         file_reason(&input, &config),
@@ -175,10 +178,11 @@ fn file_reason_allow() {
 #[test]
 fn file_reason_deny() {
     let home = std::env::var("HOME").unwrap();
-    let config = make_files_config(FilesConfig {
-        deny: vec![file_rule("~/.ssh/**", &[FileOperation::Write])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![file_rule(
+        "~/.ssh/**",
+        Decision::Deny,
+        &[FileOperation::Write],
+    )]);
     let path = format!("{home}/.ssh/id_rsa");
     let input = file_input("Write", "default", json!({"file_path": path.clone()}));
     assert_eq!(
@@ -189,10 +193,11 @@ fn file_reason_deny() {
 
 #[test]
 fn file_reason_ask() {
-    let config = make_files_config(FilesConfig {
-        ask: vec![file_rule("/**", &[FileOperation::Edit])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![file_rule(
+        "/**",
+        Decision::Ask,
+        &[FileOperation::Edit],
+    )]);
     let input = file_input("Edit", "default", json!({"file_path": "/etc/hosts"}));
     assert_eq!(
         file_reason(&input, &config),
@@ -202,10 +207,11 @@ fn file_reason_ask() {
 
 #[test]
 fn file_reason_dont_ask_mode() {
-    let config = make_files_config(FilesConfig {
-        ask: vec![file_rule("/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![file_rule(
+        "/**",
+        Decision::Ask,
+        &[FileOperation::Read],
+    )]);
     let input = file_input("Read", "dontAsk", json!({"file_path": "/tmp/secret.txt"}));
     assert_eq!(
         file_reason(&input, &config),
@@ -215,10 +221,11 @@ fn file_reason_dont_ask_mode() {
 
 #[test]
 fn file_reason_fail_closed() {
-    let config = make_files_config(FilesConfig {
-        allow: vec![file_rule("/**", &[FileOperation::Read])],
-        ..Default::default()
-    });
+    let config = make_files_config(vec![file_rule(
+        "/**",
+        Decision::Allow,
+        &[FileOperation::Read],
+    )]);
     let input = file_input("Read", "default", json!({}));
     let reason = file_reason(&input, &config);
     assert!(
