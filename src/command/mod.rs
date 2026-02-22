@@ -4,9 +4,9 @@ use crate::domain::ProgramName;
 
 /// A parsed segment of a shell command, representing one program invocation.
 #[derive(Debug, PartialEq)]
-pub(crate) struct CommandSegment {
-    pub(crate) program: ProgramName,
-    pub(crate) args: Vec<String>,
+pub struct CommandSegment {
+    pub program: ProgramName,
+    pub args: Vec<String>,
 }
 
 /// Error returned when a command string cannot be parsed.

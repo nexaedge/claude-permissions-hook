@@ -1,20 +1,61 @@
+pub mod tool_use;
+
 use serde::Deserialize;
 use serde_json::Value;
 
+pub use tool_use::{
+    BashToolUse, FileToolUse, ResolvedPath, ToolCategory, ToolParseError, ToolUse,
+};
+
 /// The input received from Claude Code on stdin for a PreToolUse hook.
 ///
-/// Field names match the snake_case JSON that Claude Code sends.
-/// Unknown fields are silently ignored for forward compatibility.
-#[derive(Debug, Deserialize)]
+/// `tool_use` is constructed automatically during deserialization from the
+/// raw `tool_name` and `tool_input` JSON fields. It is a `Result` because
+/// known tools may have invalid input (missing command, bad path, etc.).
+#[derive(Debug)]
 pub struct HookInput {
     pub session_id: String,
     pub transcript_path: String,
     pub cwd: String,
     pub permission_mode: PermissionMode,
     pub hook_event_name: String,
-    pub tool_name: String,
-    pub tool_input: Value,
+    pub tool_use: Result<ToolUse, ToolParseError>,
     pub tool_use_id: String,
+}
+
+/// Raw wire format — mirrors the JSON that Claude Code sends.
+///
+/// Passed to `ToolUse::parse` as context so helpers can access `tool_name`
+/// (for error messages) and `cwd` (for path normalization).
+#[derive(Deserialize)]
+struct RawHookInput {
+    session_id: String,
+    transcript_path: String,
+    cwd: String,
+    permission_mode: PermissionMode,
+    hook_event_name: String,
+    tool_name: String,
+    tool_input: Value,
+    tool_use_id: String,
+}
+
+impl<'de> Deserialize<'de> for HookInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawHookInput::deserialize(deserializer)?;
+        let tool_use = ToolUse::parse(&raw);
+        Ok(HookInput {
+            session_id: raw.session_id,
+            transcript_path: raw.transcript_path,
+            cwd: raw.cwd,
+            permission_mode: raw.permission_mode,
+            hook_event_name: raw.hook_event_name,
+            tool_use,
+            tool_use_id: raw.tool_use_id,
+        })
+    }
 }
 
 /// Claude Code's permission modes.
@@ -56,9 +97,14 @@ mod tests {
         assert_eq!(input.cwd, "/home/user/project");
         assert_eq!(input.permission_mode, PermissionMode::Default);
         assert_eq!(input.hook_event_name, "PreToolUse");
-        assert_eq!(input.tool_name, "Bash");
         assert_eq!(input.tool_use_id, "tu-456");
-        assert_eq!(input.tool_input, json!({"command": "ls"}));
+
+        let tool_use = input.tool_use.expect("should be Ok");
+        assert_eq!(tool_use.tool_name(), "Bash");
+        assert!(matches!(
+            tool_use,
+            ToolUse::Bash(ref b) if b.raw == "ls" && !b.segments.is_empty()
+        ));
     }
 
     #[test]
@@ -92,20 +138,10 @@ mod tests {
     }
 
     #[test]
-    fn extra_fields_in_tool_input_are_preserved() {
-        let input = json!({
-            "session_id": "sess-123",
-            "transcript_path": "/tmp/transcript.json",
-            "cwd": "/tmp/test",
-            "permission_mode": "default",
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": "git status", "description": "Check git status"},
-            "tool_use_id": "toolu_01XYZ"
-        });
-        let parsed: HookInput =
-            serde_json::from_value(input).expect("should parse input with extra tool_input fields");
-        assert_eq!(parsed.tool_input["command"], "git status");
-        assert_eq!(parsed.tool_input["description"], "Check git status");
+    fn invalid_bash_is_err() {
+        let mut input = minimal_input_json();
+        input["tool_input"] = json!({});
+        let parsed: HookInput = serde_json::from_value(input).expect("should parse");
+        assert!(parsed.tool_use.is_err());
     }
 }
