@@ -1,11 +1,11 @@
-use crate::config::rule::RuleConditions;
+use crate::config::rule::BashConditions;
 
 /// When a rule has both an inline subcommand (from rule string) and children
 /// `subcommands` chains, the children are relative to the inline position.
 ///
 /// Prepend the inline subcommand to each children chain, then clear `subcommand`.
 /// Example: `"git push" { subcommands "origin" }` → `subcommands [["push","origin"]]`.
-pub(crate) fn normalize_subcommand_chains(conditions: &mut RuleConditions) {
+pub(crate) fn normalize_subcommand_chains(conditions: &mut BashConditions) {
     if conditions.subcommand.is_empty() || conditions.subcommands.is_empty() {
         return;
     }
@@ -23,7 +23,7 @@ mod tests {
 
     #[test]
     fn normalize_subcommand_chains_empty_subcommand_noop() {
-        let mut conditions = RuleConditions::default();
+        let mut conditions = BashConditions::default();
         conditions.subcommands.push(vec!["origin".to_string()]);
         normalize_subcommand_chains(&mut conditions);
         // No inline subcommand → chains unchanged
@@ -32,7 +32,7 @@ mod tests {
 
     #[test]
     fn normalize_subcommand_chains_empty_subcommands_noop() {
-        let mut conditions = RuleConditions::default();
+        let mut conditions = BashConditions::default();
         conditions.subcommand.push("push".to_string());
         normalize_subcommand_chains(&mut conditions);
         // No children chains → subcommand unchanged
@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn normalize_subcommand_chains_prepends_and_clears() {
-        let mut conditions = RuleConditions {
+        let mut conditions = BashConditions {
             subcommand: vec!["push".to_string()],
             subcommands: vec![vec!["origin".to_string()]],
             ..Default::default()
@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn normalize_subcommand_chains_multiple_chains() {
-        let mut conditions = RuleConditions {
+        let mut conditions = BashConditions {
             subcommand: vec!["push".to_string()],
             subcommands: vec![vec!["origin".to_string()], vec!["upstream".to_string()]],
             ..Default::default()

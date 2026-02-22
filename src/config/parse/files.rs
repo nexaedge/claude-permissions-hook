@@ -1,214 +1,109 @@
 use std::collections::HashSet;
 
-use crate::config::document::ConfigDocument;
-use crate::config::files::{FileRule, FilesConfig};
+use crate::config::files::{FileOperation, FileRule, FilesConfig, PathPattern};
 use crate::config::ConfigError;
-use crate::protocol::FileOperation;
 
-/// Parse the `files` section from a config document.
+use super::{parse_tier, ConfigNode};
+
+/// Parse the `files` section out of a top-level config node slice.
 ///
-/// Returns `None` when the `files` section is absent.
-pub(crate) fn parse_files(doc: &ConfigDocument) -> Result<Option<FilesConfig>, ConfigError> {
-    let section = match doc.section("files") {
-        Some(s) => s,
-        None => return Ok(None),
-    };
+/// Returns `None` when the section is absent or empty.
+///
+/// Grammar:
+/// ```kdl
+/// files {
+///     allow "~/.config/**"                           // empty operations = all operations
+///     deny "~/.ssh/**" { operations "read" "write" } // specific operations in body
+///     deny "path1" "path2" { operations "read" }     // multiple paths, shared operations
+/// }
+/// ```
+pub(in crate::config) fn parse_files(
+    config_nodes: &[ConfigNode],
+) -> Result<Option<FilesConfig>, ConfigError> {
+    match ConfigNode::body_of(config_nodes, "files") {
+        Some(rule_nodes) => parse_file_nodes(rule_nodes).map(Some),
+        None => Ok(None),
+    }
+}
 
-    let mut config = FilesConfig::default();
+fn parse_file_nodes(nodes: &[ConfigNode]) -> Result<Vec<FileRule>, ConfigError> {
+    let mut rules = Vec::new();
+    for node in nodes {
+        let decision = parse_tier(&node.name, node.line)?;
 
-    for node in section.nodes() {
-        match node.name() {
-            "allow" | "deny" | "ask" => {
-                parse_flat_rule(&node, &mut config)?;
-            }
-            _ => {
-                parse_path_block(&node, &mut config)?;
-            }
+        if node.arguments.is_empty() {
+            return Err(ConfigError::ParseError(format!(
+                "line {}: {} node has no path entries",
+                node.line, node.name
+            )));
+        }
+
+        let operations = parse_operations_from_body(node)?;
+
+        for raw_path in &node.arguments {
+            let expanded = crate::config::normalize::files::expand_home(raw_path);
+            let path = PathPattern {
+                raw: raw_path.clone(),
+                expanded,
+            };
+            rules.push(FileRule {
+                decision: decision.clone(),
+                path,
+                operations: operations.clone(),
+            });
         }
     }
-
-    Ok(Some(config))
+    Ok(rules)
 }
 
-/// Parse a flat one-liner rule: `deny "~/.ssh/**" "read" "write"`.
-///
-/// Node name determines the tier. First string value is the path pattern,
-/// remaining values are operations.
-fn parse_flat_rule(
-    node: &crate::config::document::ParseNode<'_>,
-    config: &mut FilesConfig,
-) -> Result<(), ConfigError> {
-    let tier = node.name();
-    let line = node.line();
-    let values = node.string_values();
-
-    if node.entry_count() != values.len() {
-        return Err(ConfigError::ParseError(format!(
-            "line {line}: {tier} node contains non-string values; \
-             all entries must be quoted strings"
-        )));
-    }
-
-    if values.is_empty() {
-        return Err(ConfigError::ParseError(format!(
-            "line {line}: {tier} node requires a path pattern and at least one operation"
-        )));
-    }
-
-    let raw_pattern = values[0].to_string();
-    let op_strings = &values[1..];
-
-    if op_strings.is_empty() {
-        return Err(ConfigError::ParseError(format!(
-            "line {line}: {tier} node for pattern \"{raw_pattern}\" requires at least one operation"
-        )));
-    }
-
-    let operations = parse_operations(op_strings, line)?;
-    let home_expanded_pattern = crate::config::normalize::files::expand_home(&raw_pattern);
-    let rule = FileRule {
-        raw_pattern,
-        home_expanded_pattern,
-        operations,
-        line,
-    };
-
-    push_rule(config, tier, rule);
-    Ok(())
-}
-
-/// Parse a path-first block: `"<cwd>/**" { allow "read" "write" }`.
-///
-/// Node name is the path pattern. Children nodes named `allow`/`deny`/`ask`
-/// define the tier, with their string values parsed as operations.
-fn parse_path_block(
-    node: &crate::config::document::ParseNode<'_>,
-    config: &mut FilesConfig,
-) -> Result<(), ConfigError> {
-    let raw_pattern = node.name().to_string();
-    let line = node.line();
-
-    if !node.string_values().is_empty() || node.entry_count() > 0 {
-        return Err(ConfigError::ParseError(format!(
-            "line {line}: path block \"{raw_pattern}\" must not have inline values; \
-             use allow/deny/ask children instead"
-        )));
-    }
-
-    if !node.has_children() {
-        return Err(ConfigError::ParseError(format!(
-            "line {line}: path block \"{raw_pattern}\" requires a children block with \
-             allow/deny/ask nodes"
-        )));
-    }
-
-    let children = node.children().expect("has_children was true");
-    let child_nodes = children.nodes();
-
-    if child_nodes.is_empty() {
-        return Err(ConfigError::ParseError(format!(
-            "line {line}: path block \"{raw_pattern}\" has an empty children block"
-        )));
-    }
-
-    let mut found_tier = false;
-    for child in &child_nodes {
-        let child_tier = child.name();
-        match child_tier {
-            "allow" | "deny" | "ask" => {
-                let op_strings = child.string_values();
-                if child.entry_count() != op_strings.len() {
-                    return Err(ConfigError::ParseError(format!(
-                        "line {}: {child_tier} node in path block \"{raw_pattern}\" \
-                         contains non-string values; all entries must be quoted strings",
-                        child.line()
-                    )));
+fn parse_operations_from_body(node: &ConfigNode) -> Result<HashSet<FileOperation>, ConfigError> {
+    let mut ops = HashSet::new();
+    for child in node.body_nodes() {
+        match child.name.as_str() {
+            "operations" => {
+                for v in &child.arguments {
+                    let op = match v.as_str() {
+                        "read" => FileOperation::Read,
+                        "write" => FileOperation::Write,
+                        "edit" => FileOperation::Edit,
+                        "glob" => FileOperation::Glob,
+                        "grep" => FileOperation::Grep,
+                        unknown => {
+                            return Err(ConfigError::ParseError(format!(
+                                "line {}: unknown file operation \"{unknown}\"; expected read, write, edit, glob, or grep",
+                                child.line
+                            )));
+                        }
+                    };
+                    ops.insert(op);
                 }
-                if op_strings.is_empty() {
-                    return Err(ConfigError::ParseError(format!(
-                        "line {}: {child_tier} node in path block \"{raw_pattern}\" \
-                         requires at least one operation",
-                        child.line()
-                    )));
-                }
-                let operations = parse_operations(&op_strings, child.line())?;
-                let home_expanded_pattern =
-                    crate::config::normalize::files::expand_home(&raw_pattern);
-                let rule = FileRule {
-                    raw_pattern: raw_pattern.clone(),
-                    home_expanded_pattern,
-                    operations,
-                    line: child.line(),
-                };
-                push_rule(config, child_tier, rule);
-                found_tier = true;
             }
             other => {
                 return Err(ConfigError::ParseError(format!(
-                    "line {}: unexpected node \"{other}\" in path block \"{raw_pattern}\"; \
-                     expected allow, deny, or ask",
-                    child.line()
+                    "line {}: unexpected node \"{other}\" in files rule; expected operations",
+                    child.line
                 )));
             }
         }
     }
-
-    if !found_tier {
-        return Err(ConfigError::ParseError(format!(
-            "line {line}: path block \"{raw_pattern}\" has no allow/deny/ask children"
-        )));
-    }
-
-    Ok(())
-}
-
-/// Parse operation strings into a `HashSet<FileOperation>`.
-fn parse_operations(ops: &[&str], line: usize) -> Result<HashSet<FileOperation>, ConfigError> {
-    let mut set = HashSet::new();
-    for op in ops {
-        let file_op = match *op {
-            "read" => FileOperation::Read,
-            "write" => FileOperation::Write,
-            "edit" => FileOperation::Edit,
-            "glob" => FileOperation::Glob,
-            "grep" => FileOperation::Grep,
-            unknown => {
-                return Err(ConfigError::ParseError(format!(
-                    "line {line}: unknown file operation \"{unknown}\"; \
-                     expected read, write, edit, glob, or grep"
-                )));
-            }
-        };
-        set.insert(file_op);
-    }
-    Ok(set)
-}
-
-/// Push a rule into the correct tier vector.
-fn push_rule(config: &mut FilesConfig, tier: &str, rule: FileRule) {
-    match tier {
-        "allow" => config.allow.push(rule),
-        "deny" => config.deny.push(rule),
-        "ask" => config.ask.push(rule),
-        _ => unreachable!("tier validated before calling push_rule"),
-    }
+    Ok(ops)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::FileOperation;
+    use crate::config::files::FileOperation;
 
     fn parse_files_from_source(source: &str) -> Result<Option<FilesConfig>, ConfigError> {
         let wrapped = format!("files {{\n{source}\n}}");
-        let doc = ConfigDocument::parse(&wrapped)?;
-        parse_files(&doc)
+        let doc = crate::config::document::ConfigDocument::parse(&wrapped)?;
+        parse_files(&crate::config::parse::section_to_config_nodes(&doc))
     }
 
     fn files(source: &str) -> FilesConfig {
         parse_files_from_source(source)
             .expect("parse should succeed")
-            .expect("files section should be present")
+            .expect("nodes should produce rules")
     }
 
     fn files_err(source: &str) -> String {
@@ -219,143 +114,96 @@ mod tests {
         ops.iter().copied().collect()
     }
 
-    // --- Flat one-liner tests ---
+    // --- Simple deny/allow/ask rules ---
 
     #[test]
-    fn flat_deny_rule() {
-        let config = files(r#"deny "~/.ssh/**" "read" "write""#);
-        assert_eq!(config.deny.len(), 1);
-        assert_eq!(config.deny[0].raw_pattern, "~/.ssh/**");
+    fn deny_rule_with_operations_in_body() {
+        let config = files(r#"deny "~/.ssh/**" { operations "read" "write" }"#);
+        assert_eq!(config.len(), 1);
+        assert_eq!(config[0].path.raw, "~/.ssh/**");
         assert_eq!(
-            config.deny[0].operations,
+            config[0].operations,
             ops_set(&[FileOperation::Read, FileOperation::Write])
         );
-        assert!(config.allow.is_empty());
-        assert!(config.ask.is_empty());
     }
 
     #[test]
-    fn flat_allow_rule() {
-        let config = files(r#"allow "/tmp/**" "read""#);
-        assert_eq!(config.allow.len(), 1);
-        assert_eq!(config.allow[0].raw_pattern, "/tmp/**");
-        assert_eq!(config.allow[0].operations, ops_set(&[FileOperation::Read]));
-        assert!(config.deny.is_empty());
-        assert!(config.ask.is_empty());
+    fn allow_rule_no_body_empty_operations() {
+        let config = files(r#"allow "~/.config/**""#);
+        assert_eq!(config.len(), 1);
+        assert_eq!(config[0].path.raw, "~/.config/**");
+        assert!(config[0].operations.is_empty());
     }
 
     #[test]
-    fn flat_ask_rule() {
-        let config = files(r#"ask "/**" "write" "edit""#);
-        assert_eq!(config.ask.len(), 1);
-        assert_eq!(config.ask[0].raw_pattern, "/**");
+    fn ask_rule_with_operations() {
+        let config = files(r#"ask "/**" { operations "write" "edit" }"#);
+        assert_eq!(config.len(), 1);
+        assert_eq!(config[0].path.raw, "/**");
         assert_eq!(
-            config.ask[0].operations,
+            config[0].operations,
             ops_set(&[FileOperation::Write, FileOperation::Edit])
         );
     }
 
-    // --- Path-first block tests ---
+    // --- Multiple paths in one node ---
 
     #[test]
-    fn path_first_block_allow() {
-        let config = files(r#""<cwd>/**" { allow "read" "write" }"#);
-        assert_eq!(config.allow.len(), 1);
-        assert_eq!(config.allow[0].raw_pattern, "<cwd>/**");
+    fn multiple_paths_same_node_creates_multiple_rules() {
+        let config = files(r#"deny "path1" "path2" { operations "read" }"#);
+        assert_eq!(config.len(), 2);
+        assert_eq!(config[0].path.raw, "path1");
+        assert_eq!(config[1].path.raw, "path2");
+        assert_eq!(config[0].operations, ops_set(&[FileOperation::Read]));
+        assert_eq!(config[1].operations, ops_set(&[FileOperation::Read]));
+    }
+
+    // --- Mixed rules ---
+
+    #[test]
+    fn mixed_rules() {
+        let config = files(
+            r#"
+            deny "~/.ssh/**" { operations "read" "write" }
+            allow "<cwd>/**" { operations "read" "write" "edit" }
+            ask "/etc/**" { operations "write" }
+            "#,
+        );
+        assert_eq!(config.len(), 3);
+    }
+
+    // --- All five operations parse correctly ---
+
+    #[test]
+    fn all_operations_parse() {
+        let config = files(r#"allow "/**" { operations "read" "write" "edit" "glob" "grep" }"#);
+        assert_eq!(config.len(), 1);
         assert_eq!(
-            config.allow[0].operations,
-            ops_set(&[FileOperation::Read, FileOperation::Write])
+            config[0].operations,
+            ops_set(&[
+                FileOperation::Read,
+                FileOperation::Write,
+                FileOperation::Edit,
+                FileOperation::Glob,
+                FileOperation::Grep,
+            ])
         );
-        assert!(config.deny.is_empty());
-        assert!(config.ask.is_empty());
     }
 
-    // --- Mixed syntax ---
+    // --- Error: node with no paths ---
 
     #[test]
-    fn mixed_flat_and_path_block() {
-        let config = files(
-            r#"
-            deny "~/.ssh/**" "read" "write"
-            "<cwd>/**" {
-                allow "read" "write" "edit"
-            }
-            ask "/etc/**" "write"
-            "#,
-        );
-        assert_eq!(config.deny.len(), 1);
-        assert_eq!(config.deny[0].raw_pattern, "~/.ssh/**");
-        assert_eq!(config.allow.len(), 1);
-        assert_eq!(config.allow[0].raw_pattern, "<cwd>/**");
-        assert_eq!(config.ask.len(), 1);
-        assert_eq!(config.ask[0].raw_pattern, "/etc/**");
-    }
-
-    // --- Multiple tiers in one path block ---
-
-    #[test]
-    fn path_block_multiple_tiers() {
-        let config = files(
-            r#"
-            "/path" {
-                allow "read"
-                deny "write"
-            }
-            "#,
-        );
-        assert_eq!(config.allow.len(), 1);
-        assert_eq!(config.allow[0].raw_pattern, "/path");
-        assert_eq!(config.allow[0].operations, ops_set(&[FileOperation::Read]));
-        assert_eq!(config.deny.len(), 1);
-        assert_eq!(config.deny[0].raw_pattern, "/path");
-        assert_eq!(config.deny[0].operations, ops_set(&[FileOperation::Write]));
-    }
-
-    // --- Config without files section ---
-
-    #[test]
-    fn no_files_section_returns_none() {
-        let doc = ConfigDocument::parse(
-            r#"
-            bash {
-                allow "git" "cargo"
-            }
-            "#,
-        )
-        .unwrap();
-        let result = parse_files(&doc).unwrap();
-        assert!(result.is_none());
-    }
-
-    // --- Error: flat rule with no values ---
-
-    #[test]
-    fn error_flat_rule_no_values() {
+    fn error_node_no_paths() {
         let err = files_err("deny");
-        assert!(err.contains("requires a path pattern"), "got: {err}");
+        assert!(err.contains("no path entries"), "got: {err}");
         assert!(err.contains("line"), "should include line info, got: {err}");
-    }
-
-    // --- Error: flat rule with only path, no operations ---
-
-    #[test]
-    fn error_flat_rule_path_only_no_operations() {
-        let err = files_err(r#"deny "~/.ssh/**""#);
-        assert!(
-            err.contains("requires at least one operation"),
-            "got: {err}"
-        );
-        assert!(
-            err.contains("~/.ssh/**"),
-            "should mention pattern, got: {err}"
-        );
     }
 
     // --- Error: unknown operation name ---
 
     #[test]
     fn error_unknown_operation() {
-        let err = files_err(r#"deny "~/.ssh/**" "read" "delete""#);
+        let err = files_err(r#"deny "~/.ssh/**" { operations "read" "delete" }"#);
         assert!(err.contains("unknown file operation"), "got: {err}");
         assert!(
             err.contains("delete"),
@@ -367,137 +215,11 @@ mod tests {
         );
     }
 
-    // --- Error: path-first block with no children ---
+    // --- Error: unknown body node ---
 
     #[test]
-    fn error_path_block_no_children() {
-        let err = files_err(r#""<cwd>/**""#);
-        assert!(err.contains("requires a children block"), "got: {err}");
-    }
-
-    // --- Error: path-first block with empty tier children ---
-
-    #[test]
-    fn error_path_block_empty_children() {
-        let err = files_err(r#""<cwd>/**" { }"#);
-        assert!(err.contains("empty children block"), "got: {err}");
-    }
-
-    // --- Error: path block child tier with no operations ---
-
-    #[test]
-    fn error_path_block_tier_no_operations() {
-        let err = files_err(
-            r#"
-            "<cwd>/**" {
-                allow
-            }
-            "#,
-        );
-        assert!(
-            err.contains("requires at least one operation"),
-            "got: {err}"
-        );
-    }
-
-    // --- Backwards compat: bash-only config, files is None ---
-
-    #[test]
-    fn backwards_compat_bash_only_config() {
-        let doc = ConfigDocument::parse(
-            r#"
-            bash {
-                allow "git"
-                deny "rm"
-            }
-            "#,
-        )
-        .unwrap();
-        let result = parse_files(&doc).unwrap();
-        assert!(result.is_none());
-    }
-
-    // --- Multiple flat rules of the same tier merge ---
-
-    #[test]
-    fn multiple_flat_rules_same_tier_merge() {
-        let config = files(
-            r#"
-            deny "~/.ssh/**" "read"
-            deny "/etc/shadow" "read" "write"
-            "#,
-        );
-        assert_eq!(config.deny.len(), 2);
-        assert_eq!(config.deny[0].raw_pattern, "~/.ssh/**");
-        assert_eq!(config.deny[0].operations, ops_set(&[FileOperation::Read]));
-        assert_eq!(config.deny[1].raw_pattern, "/etc/shadow");
-        assert_eq!(
-            config.deny[1].operations,
-            ops_set(&[FileOperation::Read, FileOperation::Write])
-        );
-    }
-
-    // --- All five operations parse correctly ---
-
-    #[test]
-    fn all_operations_parse() {
-        let config = files(r#"allow "/**" "read" "write" "edit" "glob" "grep""#);
-        assert_eq!(config.allow.len(), 1);
-        assert_eq!(
-            config.allow[0].operations,
-            ops_set(&[
-                FileOperation::Read,
-                FileOperation::Write,
-                FileOperation::Edit,
-                FileOperation::Glob,
-                FileOperation::Grep,
-            ])
-        );
-    }
-
-    // --- Case-sensitive operation matching ---
-
-    #[test]
-    fn error_operation_case_sensitive() {
-        let err = files_err(r#"allow "/tmp/**" "Read""#);
-        assert!(err.contains("unknown file operation"), "got: {err}");
-        assert!(
-            err.contains("Read"),
-            "should mention the bad op, got: {err}"
-        );
-    }
-
-    // --- Line numbers in errors ---
-
-    #[test]
-    fn error_unknown_operation_includes_line_number() {
-        let err = files_err(
-            r#"
-            allow "/tmp/**" "read"
-            deny "~/.ssh/**" "badop"
-            "#,
-        );
-        assert!(
-            err.contains("line"),
-            "should include line number, got: {err}"
-        );
-        assert!(
-            err.contains("badop"),
-            "should mention the bad op, got: {err}"
-        );
-    }
-
-    // --- Path block with unexpected child node ---
-
-    #[test]
-    fn error_path_block_unexpected_child() {
-        let err = files_err(
-            r#"
-            "<cwd>/**" {
-                required-flags "read"
-            }
-            "#,
-        );
+    fn error_unexpected_body_node() {
+        let err = files_err(r#"deny "~/.ssh/**" { required-flags "read" }"#);
         assert!(err.contains("unexpected node"), "got: {err}");
         assert!(
             err.contains("required-flags"),
@@ -505,37 +227,55 @@ mod tests {
         );
     }
 
-    // --- Non-string entry validation (fail-closed) ---
+    // --- Error: unknown tier ---
 
     #[test]
-    fn error_flat_rule_non_string_entry() {
-        let err = files_err(r#"deny 123 "read" "write""#);
-        assert!(err.contains("non-string"), "got: {err}");
+    fn error_unknown_tier() {
+        let err = files_err(r#"permit "~/.ssh/**""#);
+        assert!(err.contains("unknown tier"), "got: {err}");
     }
 
+    // --- Case-sensitive operation matching ---
+
     #[test]
-    fn error_path_block_tier_non_string_entry() {
-        let err = files_err(
-            r#"
-            "<cwd>/**" {
-                allow 42
-            }
-            "#,
+    fn error_operation_case_sensitive() {
+        let err = files_err(r#"allow "/tmp/**" { operations "Read" }"#);
+        assert!(err.contains("unknown file operation"), "got: {err}");
+        assert!(
+            err.contains("Read"),
+            "should mention the bad op, got: {err}"
         );
-        assert!(err.contains("non-string"), "got: {err}");
     }
 
-    // --- Path block with inline values rejected ---
+    // --- Multiple rules of the same tier ---
 
     #[test]
-    fn error_path_block_with_inline_values() {
-        let err = files_err(
+    fn multiple_rules_same_tier() {
+        let config = files(
             r#"
-            "<cwd>/**" "read" {
-                allow "write"
-            }
+            deny "~/.ssh/**" { operations "read" }
+            deny "/etc/shadow" { operations "read" "write" }
             "#,
         );
-        assert!(err.contains("inline values"), "got: {err}");
+        assert_eq!(config.len(), 2);
+        assert_eq!(config[0].path.raw, "~/.ssh/**");
+        assert_eq!(config[0].operations, ops_set(&[FileOperation::Read]));
+        assert_eq!(config[1].path.raw, "/etc/shadow");
+        assert_eq!(
+            config[1].operations,
+            ops_set(&[FileOperation::Read, FileOperation::Write])
+        );
+    }
+
+    // --- Home expansion ---
+
+    #[test]
+    fn tilde_home_expansion() {
+        let home = std::env::var("HOME").unwrap();
+        let config = files(r#"deny "~/.ssh/**""#);
+        assert_eq!(
+            config[0].path.expanded.as_ref().unwrap(),
+            &format!("{home}/.ssh/**")
+        );
     }
 }

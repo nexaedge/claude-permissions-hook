@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use globset::GlobMatcher;
 
 use crate::domain::{Flag, ProgramName};
+use crate::protocol::Decision;
 
 /// A parsed rule for a bash program with optional conditions.
 ///
@@ -10,16 +11,17 @@ use crate::domain::{Flag, ProgramName};
 /// Matching logic is in [`crate::config::match_rule::bash`].
 #[derive(Debug)]
 pub(crate) struct BashRule {
+    pub(crate) decision: Decision,
     pub(crate) program: ProgramName,
-    pub(crate) conditions: RuleConditions,
+    pub(crate) conditions: BashConditions,
 }
 
 /// Conditions that must be met for a rule to match a command.
 ///
-/// An empty `RuleConditions` (all fields empty/default) means the rule matches
+/// An empty `BashConditions` (all fields empty/default) means the rule matches
 /// any invocation of the program — backwards compatible with v0.2.0.
-#[derive(Debug, Default)]
-pub(crate) struct RuleConditions {
+#[derive(Debug, Default, Clone)]
+pub(crate) struct BashConditions {
     /// Flags that must ALL be present (AND semantics).
     pub(crate) required_flags: HashSet<Flag>,
     /// Flags where ANY one triggers the rule (OR semantics).
@@ -35,7 +37,7 @@ pub(crate) struct RuleConditions {
 }
 
 /// A glob pattern for matching positional arguments.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PositionalPattern {
     /// Original pattern string for display/debugging.
     #[allow(dead_code)]
@@ -45,7 +47,7 @@ pub(crate) struct PositionalPattern {
 }
 
 /// A flag+value pattern for matching arguments like `--upload-file *.txt`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ArgumentPattern {
     /// The flag (e.g., `"--upload-file"`).
     pub(crate) flag: String,
@@ -90,19 +92,21 @@ mod tests {
     #[test]
     fn unconditional_rule_with_empty_conditions() {
         let rule = BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new("rm"),
-            conditions: RuleConditions::default(),
+            conditions: BashConditions::default(),
         };
         assert!(rule.is_unconditional());
     }
 
     #[test]
     fn conditional_rule_with_flags() {
-        let mut conditions = RuleConditions::default();
+        let mut conditions = BashConditions::default();
         conditions
             .required_flags
             .insert(crate::domain::Flag::new("-r"));
         let rule = BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new("rm"),
             conditions,
         };

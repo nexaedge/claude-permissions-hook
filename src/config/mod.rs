@@ -5,7 +5,6 @@ mod match_rule;
 pub(crate) mod normalize;
 pub(crate) mod parse;
 pub(crate) mod rule;
-pub(crate) mod section;
 
 use std::path::{Path, PathBuf};
 
@@ -68,9 +67,10 @@ impl Config {
     }
 
     fn from_document(doc: &ConfigDocument) -> Result<Self, ConfigError> {
+        let config_nodes = parse::section_to_config_nodes(doc);
         Ok(Config {
-            bash: Some(section::parse_tool::<BashConfig>(doc)?),
-            files: parse::files::parse_files(doc)?,
+            bash: parse::bash::parse_bash(&config_nodes)?,
+            files: parse::files::parse_files(&config_nodes)?,
         })
     }
 }

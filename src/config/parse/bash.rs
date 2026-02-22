@@ -1,98 +1,142 @@
 use crate::config::normalize::bash::normalize_subcommand_chains;
-use crate::config::rule::{self, compile_glob};
-use crate::config::section::{ChildNode, RuleEntry};
+use crate::config::rule::{self, compile_glob, BashConditions};
 use crate::config::ConfigError;
+use crate::protocol::Decision;
 
-/// Parse a tier's rule entries into BashRules.
-pub(crate) fn parse_rules(entries: Vec<RuleEntry>) -> Result<Vec<rule::BashRule>, ConfigError> {
+use super::{parse_tier, ConfigNode};
+
+/// Parse the `bash` section out of a top-level config node slice.
+///
+/// Returns `None` when the section is absent or empty.
+pub(in crate::config) fn parse_bash(
+    config_nodes: &[ConfigNode],
+) -> Result<Option<Vec<rule::BashRule>>, ConfigError> {
+    match ConfigNode::body_of(config_nodes, "bash") {
+        Some(rule_nodes) => parse_bash_nodes(rule_nodes).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Parse a list of `ConfigNode`s into `BashRule`s.
+///
+/// Caller guarantees `nodes` is non-empty.
+pub(in crate::config) fn parse_bash_nodes(
+    nodes: &[ConfigNode],
+) -> Result<Vec<rule::BashRule>, ConfigError> {
     let mut rules = Vec::new();
-    for entry in entries {
-        let at_line = |e: ConfigError| match e {
-            ConfigError::ParseError(msg) => {
-                ConfigError::ParseError(format!("line {}: {msg}", entry.line))
-            }
-            other => other,
-        };
+    for node in nodes {
+        let decision = parse_tier(&node.name, node.line)?;
 
-        for value in &entry.values {
-            let bash_rule = parse_rule_entry(value).map_err(&at_line)?;
-            rules.push(bash_rule);
+        if node.arguments.is_empty() {
+            return Err(ConfigError::ParseError(format!(
+                "line {}: {} node has no program entries",
+                node.line, node.name
+            )));
         }
 
-        // Children extend the last parsed rule.
-        if let Some(children) = &entry.children {
-            if let Some(last_rule) = rules.last_mut() {
-                parse_children(children, &mut last_rule.conditions)?;
-                // When both inline subcommand and children subcommands exist,
-                // children chains are relative to the inline subcommand position.
-                // Prepend the inline subcommand to each chain, then clear it.
-                // e.g., "git push" { subcommands "origin" } → chains [["push","origin"]]
-                normalize_subcommand_chains(&mut last_rule.conditions);
-            }
+        let conditions = parse_conditions_from_body(node)?;
+
+        for value in &node.arguments {
+            let bash_rule =
+                parse_single_rule(value, decision.clone(), conditions.clone(), node.line)?;
+            rules.push(bash_rule);
         }
     }
     Ok(rules)
 }
 
-/// Parse a single rule entry string into a BashRule.
+/// Parse a single rule string into a `BashRule`.
 ///
-/// Simple program name (no whitespace) -> BashRule with empty conditions.
-/// Rule with args -> parse with command::parse(), classify args into conditions.
-fn parse_rule_entry(value: &str) -> Result<rule::BashRule, ConfigError> {
+/// Simple program name (no whitespace) → BashRule with empty conditions.
+/// Rule with args → parse with command::parse(), classify into conditions.
+/// The provided conditions are then merged in (children override inline).
+fn parse_single_rule(
+    value: &str,
+    decision: Decision,
+    mut extra_conditions: BashConditions,
+    line: usize,
+) -> Result<rule::BashRule, ConfigError> {
+    let at_line = |e: ConfigError| match e {
+        ConfigError::ParseError(msg) => ConfigError::ParseError(format!("line {line}: {msg}")),
+        other => other,
+    };
+
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(ConfigError::ParseError("empty rule string".to_string()));
+        return Err(ConfigError::ParseError(format!(
+            "line {line}: empty rule string"
+        )));
     }
 
-    // Simple program name: no whitespace -> empty conditions
+    // Simple program name: no whitespace → empty inline conditions
     if trimmed.split_whitespace().nth(1).is_none() {
+        // Apply body conditions directly (no inline subcommand to normalize)
         return Ok(rule::BashRule {
+            decision,
             program: crate::domain::ProgramName::new(trimmed),
-            conditions: rule::RuleConditions::default(),
+            conditions: extra_conditions,
         });
     }
 
     // Parse with command::parse() to get program + args
     let segments = crate::command::parse(trimmed)
-        .map_err(|e| ConfigError::ParseError(format!("invalid rule '{trimmed}': {e}")))?;
+        .map_err(|e| ConfigError::ParseError(format!("invalid rule '{trimmed}': {e}")))
+        .map_err(&at_line)?;
 
     // Require exactly one command segment
     if segments.len() > 1 {
         return Err(ConfigError::ParseError(format!(
-            "rule '{trimmed}' contains multiple commands; use separate rules instead"
+            "line {line}: rule '{trimmed}' contains multiple commands; use separate rules instead"
         )));
     }
 
-    let segment = segments
-        .into_iter()
-        .next()
-        .ok_or_else(|| ConfigError::ParseError(format!("no program found in rule '{trimmed}'")))?;
+    let segment = segments.into_iter().next().ok_or_else(|| {
+        ConfigError::ParseError(format!("line {line}: no program found in rule '{trimmed}'"))
+    })?;
 
-    let mut conditions = rule::RuleConditions::default();
+    // Parse inline args into a base conditions, then merge extra_conditions on top
+    let mut inline_conditions = BashConditions::default();
     for arg in &segment.args {
         if arg.starts_with('-') {
-            conditions
+            inline_conditions
                 .required_flags
                 .insert(crate::domain::Flag::new(arg));
         } else {
-            conditions.subcommand.push(arg.clone());
+            inline_conditions.subcommand.push(arg.clone());
         }
     }
 
+    // Merge body conditions into inline conditions
+    inline_conditions
+        .required_flags
+        .extend(extra_conditions.required_flags.drain());
+    inline_conditions
+        .optional_flags
+        .extend(extra_conditions.optional_flags.drain());
+    inline_conditions
+        .positionals
+        .append(&mut extra_conditions.positionals);
+    inline_conditions
+        .required_arguments
+        .append(&mut extra_conditions.required_arguments);
+    inline_conditions
+        .subcommands
+        .append(&mut extra_conditions.subcommands);
+
+    // Normalize inline subcommand with children subcommand chains
+    normalize_subcommand_chains(&mut inline_conditions);
+
     Ok(rule::BashRule {
+        decision,
         program: segment.program,
-        conditions,
+        conditions: inline_conditions,
     })
 }
 
-/// Parse children nodes to extend rule conditions.
-///
-/// Operates on the intermediate [`ChildNode`] representation — no KDL dependency.
-fn parse_children(
-    children: &[ChildNode],
-    conditions: &mut rule::RuleConditions,
-) -> Result<(), ConfigError> {
-    for child in children {
+/// Parse condition children nodes from a rule body.
+fn parse_conditions_from_body(node: &ConfigNode) -> Result<BashConditions, ConfigError> {
+    let mut conditions = BashConditions::default();
+    for child in node.body_nodes() {
         let line = child.line;
         let glob_at_line = |msg: String| ConfigError::ParseError(format!("line {line}: {msg}"));
         let err_at_line = |e: ConfigError| match e {
@@ -102,47 +146,47 @@ fn parse_children(
 
         match child.name.as_str() {
             "required-flags" => {
-                for v in &child.values {
+                for v in &child.arguments {
                     conditions
                         .required_flags
                         .insert(crate::domain::Flag::new(v));
                 }
             }
             "optional-flags" => {
-                for v in &child.values {
+                for v in &child.arguments {
                     conditions
                         .optional_flags
                         .insert(crate::domain::Flag::new(v));
                 }
             }
             "positionals" => {
-                for v in &child.values {
+                for v in &child.arguments {
                     let pattern = compile_glob(v).map_err(&glob_at_line)?;
                     conditions.positionals.push(pattern);
                 }
             }
             "required-arguments" => {
-                for v in &child.values {
+                for v in &child.arguments {
                     let pattern = parse_argument_pattern(v).map_err(&err_at_line)?;
                     conditions.required_arguments.push(pattern);
                 }
             }
             "subcommands" => {
-                for v in &child.values {
+                for v in &child.arguments {
                     let chain: Vec<String> = v.split_whitespace().map(String::from).collect();
                     conditions.subcommands.push(chain);
                 }
             }
             _ => {
                 // Named positional matcher (e.g., `files "/*"`, `remotes "linear"`)
-                for v in &child.values {
+                for v in &child.arguments {
                     let pattern = compile_glob(v).map_err(&glob_at_line)?;
                     conditions.positionals.push(pattern);
                 }
             }
         }
     }
-    Ok(())
+    Ok(conditions)
 }
 
 /// Parse a `required-arguments` entry: `"--upload-file *"` -> ArgumentPattern.
@@ -164,61 +208,52 @@ fn parse_argument_pattern(value: &str) -> Result<rule::ArgumentPattern, ConfigEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::section;
+    use crate::config::rule::BashRule;
     use std::collections::HashSet;
 
     fn flag_set(items: &[&str]) -> HashSet<crate::domain::Flag> {
         items.iter().map(|s| crate::domain::Flag::new(s)).collect()
     }
 
-    /// Parse raw KDL source into a ToolSection and extract rules for the given tier.
-    fn rules_from_kdl(source: &str, tier: &str) -> Vec<rule::BashRule> {
-        let ts = section::parse_from_source(source).unwrap();
-        let entries = match tier {
-            "allow" => ts.allow,
-            "deny" => ts.deny,
-            "ask" => ts.ask,
-            _ => panic!("unknown tier: {tier}"),
-        };
-        parse_rules(entries).unwrap()
+    /// Parse raw KDL source into BashRules.
+    fn rules_from_kdl(source: &str) -> Vec<BashRule> {
+        let nodes = super::super::parse_section_from_source(source).unwrap();
+        parse_bash_nodes(&nodes).unwrap()
     }
 
-    /// Parse raw KDL, attempt to collect bash rules, return the error string.
-    fn rules_err(source: &str, tier: &str) -> String {
-        let ts = match section::parse_from_source(source) {
+    /// Parse raw KDL and return the error string.
+    fn rules_err(source: &str) -> String {
+        let nodes = match super::super::parse_section_from_source(source) {
             Err(e) => return e.to_string(),
-            Ok(ts) => ts,
+            Ok(nodes) => nodes,
         };
-        let entries = match tier {
-            "allow" => ts.allow,
-            "deny" => ts.deny,
-            "ask" => ts.ask,
-            _ => panic!("unknown tier: {tier}"),
-        };
-        parse_rules(entries).unwrap_err().to_string()
+        parse_bash_nodes(&nodes).unwrap_err().to_string()
     }
 
     #[test]
     fn rule_simple_program_name() {
-        let rules = rules_from_kdl(r#"deny "rm""#, "deny");
+        let rules = rules_from_kdl(r#"deny "rm""#);
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "rm");
+        assert_eq!(rules[0].decision, Decision::Deny);
         assert!(rules[0].is_unconditional());
     }
 
     #[test]
     fn rule_multiple_programs_on_one_node() {
-        let rules = rules_from_kdl(r#"allow "git" "cargo""#, "allow");
+        let rules = rules_from_kdl(r#"allow "git" "cargo""#);
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].program, "git");
+        assert_eq!(rules[0].decision, Decision::Allow);
         assert!(rules[0].is_unconditional());
         assert_eq!(rules[1].program, "cargo");
+        assert_eq!(rules[1].decision, Decision::Allow);
         assert!(rules[1].is_unconditional());
     }
 
     #[test]
     fn rule_inline_with_flags_and_positional() {
-        let rules = rules_from_kdl(r#"deny "rm -rf /""#, "deny");
+        let rules = rules_from_kdl(r#"deny "rm -rf /""#);
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "rm");
         assert_eq!(rules[0].conditions.required_flags, flag_set(&["-r", "-f"]));
@@ -227,7 +262,7 @@ mod tests {
 
     #[test]
     fn rule_inline_flags_only() {
-        let rules = rules_from_kdl(r#"deny "rm -rf""#, "deny");
+        let rules = rules_from_kdl(r#"deny "rm -rf""#);
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "rm");
         assert_eq!(rules[0].conditions.required_flags, flag_set(&["-r", "-f"]));
@@ -236,7 +271,7 @@ mod tests {
 
     #[test]
     fn rule_inline_with_subcommand_and_flag() {
-        let rules = rules_from_kdl(r#"deny "git push --force""#, "deny");
+        let rules = rules_from_kdl(r#"deny "git push --force""#);
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "git");
         assert_eq!(rules[0].conditions.required_flags, flag_set(&["--force"]));
@@ -245,7 +280,7 @@ mod tests {
 
     #[test]
     fn rule_inline_with_tab_whitespace_parses_args() {
-        let rules = rules_from_kdl("deny \"rm\t-rf\"", "deny");
+        let rules = rules_from_kdl("deny \"rm\t-rf\"");
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "rm");
         assert_eq!(rules[0].conditions.required_flags, flag_set(&["-r", "-f"]));
@@ -253,7 +288,7 @@ mod tests {
 
     #[test]
     fn rule_double_dash_goes_to_required_flags() {
-        let rules = rules_from_kdl(r#"deny "git --""#, "deny");
+        let rules = rules_from_kdl(r#"deny "git --""#);
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "git");
         assert_eq!(rules[0].conditions.required_flags, flag_set(&["--"]));
@@ -266,7 +301,6 @@ mod tests {
             r#"deny "rm" {
                 required-flags "r" "f"
             }"#,
-            "deny",
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "rm");
@@ -279,7 +313,6 @@ mod tests {
             r#"deny "rm" {
                 optional-flags "force"
             }"#,
-            "deny",
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].conditions.optional_flags, flag_set(&["--force"]));
@@ -291,7 +324,6 @@ mod tests {
             r#"ask "curl" {
                 required-arguments "--upload-file *"
             }"#,
-            "ask",
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].conditions.required_arguments.len(), 1);
@@ -308,7 +340,6 @@ mod tests {
             r#"allow "git" {
                 subcommands "status" "push origin"
             }"#,
-            "allow",
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].conditions.subcommands.len(), 2);
@@ -322,7 +353,6 @@ mod tests {
             r#"deny "rm" {
                 files "/*"
             }"#,
-            "deny",
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].conditions.positionals.len(), 1);
@@ -335,7 +365,6 @@ mod tests {
             r#"allow "claude mcp add" {
                 remotes "linear"
             }"#,
-            "allow",
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].program, "claude");
@@ -350,7 +379,6 @@ mod tests {
             r#"deny "rm" {
                 positionals "/*" "/home/*"
             }"#,
-            "deny",
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].conditions.positionals.len(), 2);
@@ -364,7 +392,6 @@ mod tests {
             r#"deny "rm" {
                 required-flags "r" "force" "-f" "--verbose"
             }"#,
-            "deny",
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(
@@ -375,7 +402,7 @@ mod tests {
 
     #[test]
     fn rule_invalid_inline_rule_returns_error() {
-        let err = rules_err(r#"deny "git &&""#, "deny");
+        let err = rules_err(r#"deny "git &&""#);
         assert!(
             err.contains("line 2"),
             "should include line number, got: {err}"
@@ -388,7 +415,6 @@ mod tests {
             r#"deny "rm" {
             positionals "[invalid"
         }"#,
-            "deny",
         );
         assert!(
             err.contains("line 3"),
@@ -402,7 +428,6 @@ mod tests {
             r#"deny "curl" {
             required-arguments "--upload-file"
         }"#,
-            "deny",
         );
         assert!(
             err.contains("line 3"),
@@ -412,7 +437,7 @@ mod tests {
 
     #[test]
     fn error_multi_segment_inline_rule() {
-        let err = rules_err(r#"deny "git status && rm -rf /""#, "deny");
+        let err = rules_err(r#"deny "git status && rm -rf /""#);
         assert!(err.contains("multiple commands"), "got: {err}");
         assert!(
             err.contains("line 2"),
@@ -426,36 +451,35 @@ mod tests {
             r#"deny {
             required-flags "r"
         }"#,
-            "deny",
         );
-        assert!(err.contains("no program entry"), "got: {err}");
+        assert!(err.contains("no program entries"), "got: {err}");
         assert!(
             err.contains("line 2"),
             "should include line number, got: {err}"
         );
     }
 
+    /// Previously this was an error ("multiple entries with children").
+    /// Now it's valid: multiple args each become separate rules with the same conditions.
     #[test]
-    fn error_multi_entry_with_children() {
-        let err = rules_err(
+    fn multi_entry_with_children_creates_multiple_rules() {
+        let rules = rules_from_kdl(
             r#"deny "rm" "mv" {
             required-flags "f"
         }"#,
-            "deny",
         );
-        assert!(err.contains("multiple entries"), "got: {err}");
-        assert!(
-            err.contains("line 2"),
-            "should include line number, got: {err}"
-        );
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].program, "rm");
+        assert_eq!(rules[0].decision, Decision::Deny);
+        assert_eq!(rules[0].conditions.required_flags, flag_set(&["-f"]));
+        assert_eq!(rules[1].program, "mv");
+        assert_eq!(rules[1].decision, Decision::Deny);
+        assert_eq!(rules[1].conditions.required_flags, flag_set(&["-f"]));
     }
 
     #[test]
     fn error_includes_correct_line_number() {
-        let err = rules_err(
-            "allow \"git\"\nallow \"cargo\"\ndeny {\n    required-flags \"r\"\n}",
-            "deny",
-        );
+        let err = rules_err("allow \"git\"\nallow \"cargo\"\ndeny {\n    required-flags \"r\"\n}");
         assert!(err.contains("line 4"), "should report line 4, got: {err}");
     }
 
@@ -468,7 +492,6 @@ mod tests {
             r#"allow "git push" {
                 subcommands "origin"
             }"#,
-            "allow",
         );
         assert_eq!(rules.len(), 1);
         assert!(rules[0].conditions.subcommand.is_empty());
@@ -486,7 +509,6 @@ mod tests {
             r#"allow "git push" {
                 subcommands "origin" "upstream"
             }"#,
-            "allow",
         );
         assert_eq!(rules.len(), 1);
         assert!(rules[0].conditions.subcommand.is_empty());

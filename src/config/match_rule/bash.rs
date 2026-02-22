@@ -168,7 +168,8 @@ fn find_argument_value(args: &[String], req: &ArgumentPattern) -> bool {
 mod tests {
     use super::*;
     use crate::config::rule::compile_glob;
-    use crate::config::rule::{ArgumentPattern, BashRule, RuleConditions};
+    use crate::config::rule::{ArgumentPattern, BashConditions, BashRule};
+    use crate::protocol::Decision;
 
     fn seg(program: &str, args: &[&str]) -> CommandSegment {
         CommandSegment {
@@ -179,32 +180,35 @@ mod tests {
 
     fn rule(program: &str) -> BashRule {
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
-            conditions: RuleConditions::default(),
+            conditions: BashConditions::default(),
         }
     }
 
     fn rule_required_flags(program: &str, flags: &[&str]) -> BashRule {
-        let mut conditions = RuleConditions::default();
+        let mut conditions = BashConditions::default();
         for f in flags {
             conditions
                 .required_flags
                 .insert(crate::domain::Flag::new(f));
         }
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
             conditions,
         }
     }
 
     fn rule_optional_flags(program: &str, flags: &[&str]) -> BashRule {
-        let mut conditions = RuleConditions::default();
+        let mut conditions = BashConditions::default();
         for f in flags {
             conditions
                 .optional_flags
                 .insert(crate::domain::Flag::new(f));
         }
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
             conditions,
         }
@@ -212,8 +216,9 @@ mod tests {
 
     fn rule_subcommand(program: &str, subcmd: &[&str]) -> BashRule {
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
-            conditions: RuleConditions {
+            conditions: BashConditions {
                 subcommand: subcmd.iter().map(|s| s.to_string()).collect(),
                 ..Default::default()
             },
@@ -221,31 +226,33 @@ mod tests {
     }
 
     fn rule_positionals(program: &str, patterns: &[&str]) -> BashRule {
-        let mut conditions = RuleConditions::default();
+        let mut conditions = BashConditions::default();
         for p in patterns {
             conditions.positionals.push(compile_glob(p).unwrap());
         }
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
             conditions,
         }
     }
 
     fn rule_subcommands(program: &str, chains: &[&[&str]]) -> BashRule {
-        let mut conditions = RuleConditions::default();
+        let mut conditions = BashConditions::default();
         for chain in chains {
             conditions
                 .subcommands
                 .push(chain.iter().map(|s| s.to_string()).collect());
         }
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
             conditions,
         }
     }
 
     fn rule_required_arguments(program: &str, pairs: &[(&str, &str)]) -> BashRule {
-        let mut conditions = RuleConditions::default();
+        let mut conditions = BashConditions::default();
         for (flag, value_pattern) in pairs {
             conditions.required_arguments.push(ArgumentPattern {
                 flag: flag.to_string(),
@@ -253,6 +260,7 @@ mod tests {
             });
         }
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
             conditions,
         }
@@ -461,8 +469,9 @@ mod tests {
         patterns: &[&str],
     ) -> BashRule {
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
-            conditions: RuleConditions {
+            conditions: BashConditions {
                 subcommand: subcmd.iter().map(|s| s.to_string()).collect(),
                 positionals: patterns.iter().map(|p| compile_glob(p).unwrap()).collect(),
                 ..Default::default()
@@ -611,8 +620,9 @@ mod tests {
 
     fn rule_subcommands_with_flags(program: &str, chains: &[&[&str]], flags: &[&str]) -> BashRule {
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
-            conditions: RuleConditions {
+            conditions: BashConditions {
                 subcommands: chains
                     .iter()
                     .map(|c| c.iter().map(|s| s.to_string()).collect())
@@ -759,8 +769,9 @@ mod tests {
         patterns: &[&str],
     ) -> BashRule {
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
-            conditions: RuleConditions {
+            conditions: BashConditions {
                 subcommands: chains
                     .iter()
                     .map(|c| c.iter().map(|s| s.to_string()).collect())
@@ -807,8 +818,9 @@ mod tests {
         flags: &[&str],
     ) -> BashRule {
         BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new(program),
-            conditions: RuleConditions {
+            conditions: BashConditions {
                 subcommands: chains
                     .iter()
                     .map(|c| c.iter().map(|s| s.to_string()).collect())
@@ -875,8 +887,9 @@ mod tests {
         // subcommand: ["push"], subcommands: [["push", "origin"]]
         // Actual: "push origin main" → subcommand prefix ["push"] ✓, chain ["push","origin"] ✓
         let r = BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new("git"),
-            conditions: RuleConditions {
+            conditions: BashConditions {
                 subcommand: vec!["push".to_string()],
                 subcommands: vec![vec!["push".to_string(), "origin".to_string()]],
                 ..Default::default()
@@ -889,8 +902,9 @@ mod tests {
     fn no_match_inline_subcommand_ok_children_subcommands_miss() {
         // subcommand: ["push"] ✓, subcommands: [["push","origin"]] ✗ (upstream ≠ origin)
         let r = BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new("git"),
-            conditions: RuleConditions {
+            conditions: BashConditions {
                 subcommand: vec!["push".to_string()],
                 subcommands: vec![vec!["push".to_string(), "origin".to_string()]],
                 ..Default::default()
@@ -903,8 +917,9 @@ mod tests {
     fn no_match_children_subcommands_ok_inline_subcommand_miss() {
         // subcommand: ["push"] ✗ (pull ≠ push), subcommands: [["pull"]] would pass but moot
         let r = BashRule {
+            decision: Decision::Deny,
             program: crate::domain::ProgramName::new("git"),
-            conditions: RuleConditions {
+            conditions: BashConditions {
                 subcommand: vec!["push".to_string()],
                 subcommands: vec![vec!["pull".to_string()]],
                 ..Default::default()

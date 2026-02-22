@@ -8,45 +8,54 @@ use std::collections::HashSet;
 
 use crate::domain::PathError;
 use crate::protocol::Decision;
-use crate::protocol::FileOperation;
 
-/// File tool configuration: rules for allow, deny, or ask decisions by path.
-#[derive(Debug, Default)]
-pub struct FilesConfig {
-    pub deny: Vec<FileRule>,
-    pub ask: Vec<FileRule>,
-    pub allow: Vec<FileRule>,
-}
+pub use crate::domain::FileOperation;
 
-/// A single file rule binding a path pattern to a set of operations.
+/// File configuration: a flat ordered list of rules.
+///
+/// Rules are evaluated in order by severity (deny > ask > allow).
+pub type FilesConfig = Vec<FileRule>;
+
+/// A single file rule binding a path pattern and decision to a set of operations.
 #[derive(Debug)]
 pub struct FileRule {
-    /// Raw glob pattern (may contain `<cwd>`, `<home>`, `~`).
+    /// The decision to apply when this rule matches.
+    pub decision: Decision,
+    /// The path pattern (raw and home-expanded).
+    pub path: PathPattern,
+    /// Which file operations this rule applies to.
+    /// Empty means the rule applies to all operations.
+    pub operations: HashSet<FileOperation>,
+}
+
+/// A file path pattern with raw and home-expanded forms.
+#[derive(Debug)]
+pub struct PathPattern {
+    /// Original pattern string (may contain `<cwd>`, `<home>`, `~`).
+    ///
+    /// Used in tests and error messages; the expanded form is used for matching.
     #[allow(dead_code)]
-    pub raw_pattern: String,
+    pub raw: String,
     /// Pattern with `~` and `<home>` expanded at load time.
     ///
     /// `Err` when `$HOME` is not set and the pattern requires it.
     /// `<cwd>` is **not** expanded here — that happens at match time.
-    pub home_expanded_pattern: Result<String, PathError>,
-    /// Which file operations this rule applies to.
-    pub operations: HashSet<FileOperation>,
-    /// 1-based line number in the source file.
-    #[allow(dead_code)]
-    pub line: usize,
+    pub expanded: Result<String, PathError>,
 }
 
-impl FilesConfig {
-    /// Look up a normalized path and operation against file rules.
-    ///
-    /// Delegates to [`super::match_rule::files::lookup`].
-    /// Precedence: deny > ask > allow. Returns `None` if no rule matches.
-    pub fn lookup(
-        &self,
-        normalized_path: &str,
-        operation: FileOperation,
-        cwd: &str,
-    ) -> Option<Decision> {
-        super::match_rule::files::lookup(self, normalized_path, operation, cwd)
-    }
+/// Look up a normalized path and operation against file rules.
+///
+/// Uses severity ordering: deny > ask > allow. Returns the most restrictive
+/// decision among all matching rules. Returns `None` if no rule matches.
+///
+/// If any rule for the given operation has a pattern that failed `$HOME`
+/// expansion (e.g., `$HOME` is not set), the decision is fail-closed `Ask`
+/// regardless of tier, preventing silent `deny` from an unresolvable pattern.
+pub fn lookup(
+    rules: &[FileRule],
+    normalized_path: &str,
+    operation: FileOperation,
+    cwd: &str,
+) -> Option<Decision> {
+    super::match_rule::files::lookup(rules, normalized_path, operation, cwd)
 }
