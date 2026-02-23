@@ -1,21 +1,22 @@
 use crate::config::Config;
+use crate::decision_engine::matcher;
 use crate::domain::rule::bash::BashRule;
 use crate::domain::CommandSegment;
 use crate::domain::Decision;
 use crate::domain::PermissionMode;
 
-use super::aggregation::{aggregate_decisions, apply_mode_modifier};
-use super::reason::build_reason;
+use super::super::aggregation::{aggregate_decisions, apply_mode_modifier};
+use super::super::reason::build_reason;
 
 /// Look up a command segment against bash rules.
 ///
-/// Uses `BashRule::matches()` for full condition evaluation (program name,
+/// Uses `matcher::bash::matches()` for full condition evaluation (program name,
 /// flags, subcommands, positionals, required arguments).
 /// Severity ordering: deny > ask > allow. Returns `None` for unlisted programs.
 fn lookup(rules: &[BashRule], segment: &CommandSegment) -> Option<Decision> {
     rules
         .iter()
-        .filter(|r| r.matches(segment))
+        .filter(|r| matcher::bash::matches(r, segment))
         .map(|r| r.decision.clone())
         .max_by_key(|d| d.severity())
 }
@@ -25,7 +26,7 @@ fn lookup(rules: &[BashRule], segment: &CommandSegment) -> Option<Decision> {
 /// Receives already-parsed command segments.
 /// Only performs config matching — no validation or parsing.
 /// Returns the final decision and a human-readable reason string.
-pub(super) fn evaluate_bash(
+pub(crate) fn evaluate_bash(
     segments: &[CommandSegment],
     permission_mode: &PermissionMode,
     config: &Config,

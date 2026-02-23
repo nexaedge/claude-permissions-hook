@@ -2,7 +2,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use crate::decision;
+use crate::decision_engine;
 use crate::domain::Decision;
 use crate::hook_adapter::HookOutput;
 
@@ -103,7 +103,7 @@ fn execute_from_stdin(
         return Ok(None);
     };
 
-    let result = decision::evaluate(
+    let result = decision_engine::evaluate(
         &request,
         &hook_input.cwd,
         &hook_input.permission_mode,

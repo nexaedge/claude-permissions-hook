@@ -1,12 +1,13 @@
 use crate::config::Config;
+use crate::decision_engine::matcher;
 use crate::domain::rule::files::FileRule;
 use crate::domain::Decision;
 use crate::domain::FileOperation;
 use crate::domain::FileTarget;
 use crate::domain::PermissionMode;
 
-use super::aggregation::{aggregate_decisions, apply_mode_modifier};
-use super::reason::build_file_reason;
+use super::super::aggregation::{aggregate_decisions, apply_mode_modifier};
+use super::super::reason::build_file_reason;
 
 /// Look up a normalized path and operation against file rules.
 ///
@@ -20,7 +21,7 @@ fn lookup(
 ) -> Option<Decision> {
     rules
         .iter()
-        .filter(|r| r.matches(normalized_path, operation, cwd))
+        .filter(|r| matcher::file::matches(r, normalized_path, operation, cwd))
         .map(|r| r.decision.clone())
         .max_by_key(|d| d.severity())
 }
@@ -30,7 +31,7 @@ fn lookup(
 /// Receives already-resolved file targets with normalized absolute paths.
 /// Only performs config matching — no validation, parsing, or normalization.
 /// Returns the final decision and a human-readable reason string.
-pub(super) fn evaluate_file_tool(
+pub(crate) fn evaluate_file_tool(
     operation: FileOperation,
     targets: &[FileTarget],
     cwd: &str,
@@ -69,7 +70,7 @@ pub(super) fn evaluate_file_tool(
 mod tests {
     use super::*;
 
-    fn files(source: &str) -> Vec<FileRule> {
+    fn files(source: &str) -> Vec<crate::domain::rule::files::FileRule> {
         let wrapped = format!("files {{\n{source}\n}}");
         let config = crate::config::Config::parse(&wrapped).expect("parse should succeed");
         config.files
@@ -120,7 +121,6 @@ mod tests {
     #[test]
     fn lookup_wrong_operation_returns_none() {
         let config = files(r#"deny "/tmp/**" { operations "read" }"#);
-        // write is not denied
         let result = lookup(&config, "/tmp/foo.txt", FileOperation::Write, "/");
         assert_eq!(result, None);
     }
@@ -149,7 +149,6 @@ mod tests {
     #[test]
     fn lookup_empty_operations_matches_any_operation() {
         let config = files(r#"deny "/etc/**""#);
-        // Empty operations = all operations
         let result = lookup(&config, "/etc/passwd", FileOperation::Read, "/");
         assert_eq!(result, Some(Decision::Deny));
         let result2 = lookup(&config, "/etc/passwd", FileOperation::Write, "/");

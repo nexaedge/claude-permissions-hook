@@ -1,4 +1,4 @@
-use crate::decision::aggregation::{aggregate_decisions, apply_mode_modifier};
+use crate::decision_engine::aggregation::{aggregate_decisions, apply_mode_modifier};
 use crate::domain::Decision;
 use crate::domain::PermissionMode;
 

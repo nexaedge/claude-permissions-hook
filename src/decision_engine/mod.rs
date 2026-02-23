@@ -1,6 +1,6 @@
 mod aggregation;
-mod bash;
-mod files;
+mod evaluator;
+mod matcher;
 mod reason;
 
 use crate::config::Config;
@@ -31,7 +31,7 @@ pub(crate) const APP_NAME: &str = "claude-permissions-hook";
 /// use claude_permissions_hook::hook_adapter::HookInput;
 /// use claude_permissions_hook::domain::Decision;
 /// use claude_permissions_hook::config::Config;
-/// use claude_permissions_hook::decision::evaluate;
+/// use claude_permissions_hook::decision_engine::evaluate;
 ///
 /// let input: HookInput = serde_json::from_str(r#"{
 ///     "session_id": "s1",
@@ -57,12 +57,12 @@ pub fn evaluate(
 ) -> Option<(Decision, String)> {
     match request {
         ToolRequest::Bash { ref segments } => {
-            bash::evaluate_bash(segments, permission_mode, config)
+            evaluator::bash::evaluate_bash(segments, permission_mode, config)
         }
         ToolRequest::File {
             operation,
             ref targets,
-        } => files::evaluate_file_tool(*operation, targets, cwd, permission_mode, config),
+        } => evaluator::file::evaluate_file_tool(*operation, targets, cwd, permission_mode, config),
     }
 }
 

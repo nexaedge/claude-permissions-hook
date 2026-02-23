@@ -82,7 +82,7 @@ fn decide(
     mode: PermissionMode,
     config: &Config,
 ) -> Option<(Decision, String)> {
-    crate::decision::evaluate(request, cwd, &mode, config)
+    crate::decision_engine::evaluate(request, cwd, &mode, config)
 }
 
 // ---- Bash: single command ----

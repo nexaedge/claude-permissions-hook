@@ -13,7 +13,7 @@ use serde_json::json;
 fn eval(input: &HookInput, config: Option<&Config>) -> Option<(Decision, String)> {
     let request = input.to_request()?;
     config.and_then(|cfg| {
-        crate::decision::evaluate(&request, &input.cwd, &input.permission_mode, cfg)
+        crate::decision_engine::evaluate(&request, &input.cwd, &input.permission_mode, cfg)
     })
 }
 
