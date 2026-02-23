@@ -6,6 +6,7 @@ use std::path::Path;
 
 use crate::domain::rule::bash::BashRule;
 use crate::domain::rule::files::FileRule;
+use crate::domain::Environment;
 use crate::error::ConfigError;
 
 use document::ConfigDocument;
@@ -27,11 +28,37 @@ pub struct Config {
     pub(crate) has_files: bool,
 }
 
+/// Parse KDL config content into a Config.
+///
+/// CLI reads the file from disk; this function only parses the string content.
+/// Returns `Err(ConfigError)` if the content contains invalid KDL.
+/// Missing or empty sections produce an empty `Vec` in the resulting Config.
+///
+/// The `_env` parameter is reserved for future use (home directory expansion).
+/// Currently home expansion uses `std::env` directly; a future step will
+/// thread `Environment` through the normalize layer.
+///
+/// # Examples
+///
+/// ```
+/// use claude_permissions_hook::config::parse_policy;
+/// use claude_permissions_hook::domain::Environment;
+/// use std::path::PathBuf;
+///
+/// let env = Environment { home: PathBuf::from("/home/user"), cwd: PathBuf::from("/tmp") };
+/// let config = parse_policy(r#"bash { allow "git" }"#, &env).unwrap();
+/// ```
+pub fn parse_policy(content: &str, _env: &Environment) -> Result<Config, ConfigError> {
+    Config::parse(content)
+}
+
 impl Config {
     /// Load config from a file path.
     ///
     /// I/O errors (file not found, permission denied) propagate as `io::Error`.
     /// KDL parse errors propagate as `ConfigError::InvalidSyntax`.
+    ///
+    /// Kept temporarily — will be removed in Step 5 when CLI takes over file I/O.
     ///
     /// # Examples
     ///
