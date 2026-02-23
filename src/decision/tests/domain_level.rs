@@ -7,8 +7,7 @@ use crate::config::Config;
 use crate::domain::rule::bash::{BashConditions, BashRule};
 use crate::domain::rule::files::{FileRule, PathPattern};
 use crate::domain::{
-    CommandSegment, Decision, FileOperation, PermissionMode, ProgramName, ResolvedPath,
-    ToolCategory, ToolRequest,
+    CommandSegment, Decision, FileOperation, FileTarget, PermissionMode, ProgramName, ToolRequest,
 };
 use std::collections::HashSet;
 
@@ -63,6 +62,15 @@ fn file_rule(pattern: &str, expanded: &str, decision: Decision, ops: &[FileOpera
             expanded: expanded.to_string(),
         },
         operations: ops.iter().copied().collect::<HashSet<_>>(),
+    }
+}
+
+fn target(raw: &str, normalized: &str, cwd: &str) -> FileTarget {
+    FileTarget {
+        raw_path: raw.to_string(),
+        normalized_path: normalized.into(),
+        cwd: cwd.into(),
+        project_path: cwd.into(),
     }
 }
 
@@ -197,10 +205,7 @@ fn file_allow_read() {
     )]);
     let request = ToolRequest::File {
         operation: FileOperation::Read,
-        paths: vec![ResolvedPath {
-            raw: "/tmp/test.txt".into(),
-            normalized: "/tmp/test.txt".into(),
-        }],
+        targets: vec![target("/tmp/test.txt", "/tmp/test.txt", "/tmp")],
     };
     let (d, _) = decide(&request, "/tmp", PermissionMode::Default, &config).unwrap();
     assert_eq!(d, Decision::Allow);
@@ -216,10 +221,7 @@ fn file_deny_write() {
     )]);
     let request = ToolRequest::File {
         operation: FileOperation::Write,
-        paths: vec![ResolvedPath {
-            raw: "/etc/passwd".into(),
-            normalized: "/etc/passwd".into(),
-        }],
+        targets: vec![target("/etc/passwd", "/etc/passwd", "/tmp")],
     };
     let (d, _) = decide(&request, "/tmp", PermissionMode::Default, &config).unwrap();
     assert_eq!(d, Decision::Deny);
@@ -235,10 +237,7 @@ fn file_no_match_returns_none() {
     )]);
     let request = ToolRequest::File {
         operation: FileOperation::Write,
-        paths: vec![ResolvedPath {
-            raw: "/tmp/test.txt".into(),
-            normalized: "/tmp/test.txt".into(),
-        }],
+        targets: vec![target("/tmp/test.txt", "/tmp/test.txt", "/tmp")],
     };
     assert!(decide(&request, "/tmp", PermissionMode::Default, &config).is_none());
 }
@@ -253,49 +252,10 @@ fn file_bypass_ask_to_allow() {
     )]);
     let request = ToolRequest::File {
         operation: FileOperation::Edit,
-        paths: vec![ResolvedPath {
-            raw: "/etc/hosts".into(),
-            normalized: "/etc/hosts".into(),
-        }],
+        targets: vec![target("/etc/hosts", "/etc/hosts", "/tmp")],
     };
     let (d, _) = decide(&request, "/tmp", PermissionMode::BypassPermissions, &config).unwrap();
     assert_eq!(d, Decision::Allow);
-}
-
-// ---- Unknown + ParseError ----
-
-#[test]
-fn unknown_returns_none() {
-    let config = bash_config(&["git"], &[], &[]);
-    assert!(decide(
-        &ToolRequest::Unknown,
-        "/tmp",
-        PermissionMode::Default,
-        &config
-    )
-    .is_none());
-}
-
-#[test]
-fn parse_error_bash_with_config_returns_ask() {
-    let config = bash_config(&["git"], &[], &[]);
-    let request = ToolRequest::ParseError {
-        category: ToolCategory::Bash,
-        reason: "missing command".into(),
-    };
-    let (d, _) = decide(&request, "/tmp", PermissionMode::Default, &config).unwrap();
-    assert_eq!(d, Decision::Ask);
-}
-
-#[test]
-fn parse_error_file_without_config_returns_none() {
-    // Config has bash only, not files — so file parse errors get no opinion
-    let config = bash_config(&["git"], &[], &[]);
-    let request = ToolRequest::ParseError {
-        category: ToolCategory::File,
-        reason: "no file path".into(),
-    };
-    assert!(decide(&request, "/tmp", PermissionMode::Default, &config).is_none());
 }
 
 // ---- CWD expansion in file rules ----
@@ -310,10 +270,7 @@ fn file_cwd_expansion_matches() {
     )]);
     let request = ToolRequest::File {
         operation: FileOperation::Read,
-        paths: vec![ResolvedPath {
-            raw: "/project/src/main.rs".into(),
-            normalized: "/project/src/main.rs".into(),
-        }],
+        targets: vec![target("/project/src/main.rs", "/project/src/main.rs", "/project")],
     };
     let (d, _) = decide(&request, "/project", PermissionMode::Default, &config).unwrap();
     assert_eq!(d, Decision::Allow);

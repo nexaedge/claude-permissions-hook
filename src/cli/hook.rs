@@ -81,7 +81,23 @@ fn execute_from_stdin(
         )));
     };
 
-    let request = hook_input.to_request();
+    // Handle parse errors at the boundary: fail-closed if config exists for that category
+    if let Err(ref err) = hook_input.tool_use {
+        let has_config = match err.category {
+            crate::domain::PolicySet::Bash => config.bash.is_some(),
+            crate::domain::PolicySet::File => config.files.is_some(),
+        };
+        if has_config {
+            return Ok(Some(HookOutput::ask(&err.reason)));
+        }
+        return Ok(None);
+    }
+
+    // Unknown tools → no opinion
+    let Some(request) = hook_input.to_request() else {
+        return Ok(None);
+    };
+
     let result = decision::evaluate(
         &request,
         &hook_input.cwd,

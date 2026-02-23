@@ -4,7 +4,7 @@ mod files;
 mod reason;
 
 use crate::config::Config;
-use crate::domain::{Decision, PermissionMode, ToolCategory, ToolRequest};
+use crate::domain::{Decision, PermissionMode, ToolRequest};
 
 pub(crate) const APP_NAME: &str = "claude-permissions-hook";
 
@@ -61,25 +61,8 @@ pub fn evaluate(
         }
         ToolRequest::File {
             operation,
-            ref paths,
-        } => files::evaluate_file_tool(*operation, paths, cwd, permission_mode, config),
-        ToolRequest::Unknown => None,
-        // Fail-closed: invalid input for a known tool → ask, but only if we have
-        // config for that tool category. Without config, we have no opinion.
-        ToolRequest::ParseError {
-            ref category,
-            ref reason,
-        } => {
-            let has_config = match category {
-                ToolCategory::Bash => config.bash.is_some(),
-                ToolCategory::File => config.files.is_some(),
-            };
-            if has_config {
-                Some((Decision::Ask, reason.clone()))
-            } else {
-                None
-            }
-        }
+            ref targets,
+        } => files::evaluate_file_tool(*operation, targets, cwd, permission_mode, config),
     }
 }
 

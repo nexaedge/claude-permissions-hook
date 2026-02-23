@@ -2,8 +2,8 @@ use crate::config::Config;
 use crate::domain::rule::files::FileRule;
 use crate::domain::Decision;
 use crate::domain::FileOperation;
+use crate::domain::FileTarget;
 use crate::domain::PermissionMode;
-use crate::domain::ResolvedPath;
 
 use super::aggregation::{aggregate_decisions, apply_mode_modifier};
 use super::reason::build_file_reason;
@@ -27,21 +27,28 @@ fn lookup(
 
 /// Evaluate a file tool invocation against file config rules.
 ///
-/// Receives already-resolved paths with normalized absolute forms.
+/// Receives already-resolved file targets with normalized absolute paths.
 /// Only performs config matching — no validation, parsing, or normalization.
 /// Returns the final decision and a human-readable reason string.
 pub(super) fn evaluate_file_tool(
     operation: FileOperation,
-    paths: &[ResolvedPath],
+    targets: &[FileTarget],
     cwd: &str,
     permission_mode: &PermissionMode,
     config: &Config,
 ) -> Option<(Decision, String)> {
     let files_config = config.files.as_ref()?;
 
-    let per_path: Vec<Option<Decision>> = paths
+    let per_path: Vec<Option<Decision>> = targets
         .iter()
-        .map(|resolved| lookup(files_config, &resolved.normalized, operation, cwd))
+        .map(|target| {
+            lookup(
+                files_config,
+                &target.normalized_path.to_string_lossy(),
+                operation,
+                cwd,
+            )
+        })
         .collect();
 
     let aggregated = aggregate_decisions(&per_path);
@@ -49,7 +56,7 @@ pub(super) fn evaluate_file_tool(
     aggregated.map(|decision| {
         let modified = apply_mode_modifier(decision.clone(), permission_mode);
         let op_str = &operation.to_string();
-        let raw_paths: Vec<&str> = paths.iter().map(|p| p.raw.as_str()).collect();
+        let raw_paths: Vec<&str> = targets.iter().map(|t| t.raw_path.as_str()).collect();
         let reason = build_file_reason(&modified, &raw_paths, &per_path, &decision, op_str);
         (modified, reason)
     })

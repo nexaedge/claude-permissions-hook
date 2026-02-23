@@ -4,7 +4,6 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::domain::PermissionMode;
-use crate::domain::ResolvedPath;
 use crate::domain::ToolRequest;
 pub use tool_use::{BashToolUse, FileToolUse, ToolParseError, ToolUse};
 
@@ -27,28 +26,20 @@ pub struct HookInput {
 impl HookInput {
     /// Convert protocol input into domain `ToolRequest` for the decision layer.
     ///
-    /// Maps protocol `ToolUse` variants to domain `ToolRequest`.
-    pub fn to_request(&self) -> ToolRequest {
+    /// Returns `Some` for tools the hook can evaluate (Bash, File).
+    /// Returns `None` for unknown tools — the caller should return no opinion.
+    /// Parse errors remain accessible via `self.tool_use` for fail-closed handling.
+    pub fn to_request(&self) -> Option<ToolRequest> {
         match &self.tool_use {
-            Ok(ToolUse::Bash(ref bash)) => ToolRequest::Bash {
+            Ok(ToolUse::Bash(ref bash)) => Some(ToolRequest::Bash {
                 segments: bash.segments.clone(),
-            },
-            Ok(ToolUse::File(ref file)) => ToolRequest::File {
+            }),
+            Ok(ToolUse::File(ref file)) => Some(ToolRequest::File {
                 operation: file.operation,
-                paths: file
-                    .paths
-                    .iter()
-                    .map(|p| ResolvedPath {
-                        raw: p.raw.clone(),
-                        normalized: p.normalized.clone(),
-                    })
-                    .collect(),
-            },
-            Ok(ToolUse::Unknown { .. }) => ToolRequest::Unknown,
-            Err(err) => ToolRequest::ParseError {
-                category: err.category,
-                reason: err.reason.clone(),
-            },
+                targets: file.targets.clone(),
+            }),
+            Ok(ToolUse::Unknown { .. }) => None,
+            Err(_) => None,
         }
     }
 }
