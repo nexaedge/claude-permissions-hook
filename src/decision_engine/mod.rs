@@ -45,7 +45,7 @@ pub(crate) const APP_NAME: &str = "claude-permissions-hook";
 /// }"#).unwrap();
 ///
 /// let config = Config::parse("bash { allow \"git\" }").unwrap();
-/// let request = input.to_request();
+/// let request = input.to_request().expect("known tool");
 /// let (decision, _reason) = evaluate(&request, &input.cwd, &input.permission_mode, &config).unwrap();
 /// assert_eq!(decision, Decision::Allow);
 /// ```
