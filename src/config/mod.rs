@@ -2,10 +2,11 @@ pub(crate) mod document;
 pub(crate) mod normalize;
 pub(crate) mod parse;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::domain::rule::bash::BashRule;
 use crate::domain::rule::files::FileRule;
+use crate::error::ConfigError;
 
 use document::ConfigDocument;
 
@@ -26,21 +27,11 @@ pub struct Config {
     pub(crate) has_files: bool,
 }
 
-/// Errors that can occur when loading or parsing a config file.
-#[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    #[error("config file not found: {0}")]
-    NotFound(PathBuf),
-    #[error("failed to read config: {0}")]
-    ReadError(#[from] std::io::Error),
-    #[error("invalid KDL syntax: {0}")]
-    ParseError(String),
-}
-
 impl Config {
     /// Load config from a file path.
     ///
-    /// Returns `ConfigError::NotFound` if the file does not exist.
+    /// I/O errors (file not found, permission denied) propagate as `io::Error`.
+    /// KDL parse errors propagate as `ConfigError::InvalidSyntax`.
     ///
     /// # Examples
     ///
@@ -50,9 +41,9 @@ impl Config {
     ///
     /// let config = Config::load(Path::new("/path/to/config.kdl")).unwrap();
     /// ```
-    pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        let doc = ConfigDocument::load(path)?;
-        Self::from_document(&doc)
+    pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = std::fs::read_to_string(path)?;
+        Ok(Self::parse(&content)?)
     }
 
     /// Parse config from a KDL string.

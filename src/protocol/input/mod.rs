@@ -5,7 +5,8 @@ use serde_json::Value;
 
 use crate::domain::PermissionMode;
 use crate::domain::ToolRequest;
-pub use tool_use::{BashToolUse, FileToolUse, ToolParseError, ToolUse};
+pub use crate::error::ToolParseError;
+pub use tool_use::{BashToolUse, FileToolUse, ToolUse};
 
 /// The input received from Claude Code on stdin for a PreToolUse hook.
 ///

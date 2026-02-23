@@ -1,5 +1,5 @@
 use crate::config::normalize::bash::normalize_subcommand_chains;
-use crate::config::ConfigError;
+use crate::error::ConfigError;
 use crate::domain::rule::bash::{compile_glob, BashConditions, BashRule};
 use crate::domain::Decision;
 
@@ -28,7 +28,7 @@ pub(in crate::config) fn parse_bash_nodes(
         let decision = parse_tier(&node.name, node.line)?;
 
         if node.arguments.is_empty() {
-            return Err(ConfigError::ParseError(format!(
+            return Err(ConfigError::InvalidSyntax(format!(
                 "line {}: {} node has no program entries",
                 node.line, node.name
             )));
@@ -56,14 +56,14 @@ fn parse_single_rule(
     mut extra_conditions: BashConditions,
     line: usize,
 ) -> Result<BashRule, ConfigError> {
-    let at_line = |e: ConfigError| match e {
-        ConfigError::ParseError(msg) => ConfigError::ParseError(format!("line {line}: {msg}")),
-        other => other,
+    let at_line = |e: ConfigError| {
+        let ConfigError::InvalidSyntax(msg) = e;
+        ConfigError::InvalidSyntax(format!("line {line}: {msg}"))
     };
 
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(ConfigError::ParseError(format!(
+        return Err(ConfigError::InvalidSyntax(format!(
             "line {line}: empty rule string"
         )));
     }
@@ -72,7 +72,7 @@ fn parse_single_rule(
     if trimmed.split_whitespace().nth(1).is_none() {
         // Apply body conditions directly (no inline subcommand to normalize)
         let program = crate::domain::ProgramName::parse(trimmed)
-            .map_err(|_| ConfigError::ParseError(format!("line {line}: empty program name")))?;
+            .map_err(|_| ConfigError::InvalidSyntax(format!("line {line}: empty program name")))?;
         return Ok(BashRule {
             decision,
             program,
@@ -82,18 +82,18 @@ fn parse_single_rule(
 
     // Parse with command::parse() to get program + args
     let segments = crate::command::parse(trimmed)
-        .map_err(|e| ConfigError::ParseError(format!("invalid rule '{trimmed}': {e}")))
+        .map_err(|e| ConfigError::InvalidSyntax(format!("invalid rule '{trimmed}': {e}")))
         .map_err(&at_line)?;
 
     // Require exactly one command segment
     if segments.len() > 1 {
-        return Err(ConfigError::ParseError(format!(
+        return Err(ConfigError::InvalidSyntax(format!(
             "line {line}: rule '{trimmed}' contains multiple commands; use separate rules instead"
         )));
     }
 
     let segment = segments.into_iter().next().ok_or_else(|| {
-        ConfigError::ParseError(format!("line {line}: no program found in rule '{trimmed}'"))
+        ConfigError::InvalidSyntax(format!("line {line}: no program found in rule '{trimmed}'"))
     })?;
 
     // Parse inline args into a base conditions, then merge extra_conditions on top
@@ -140,10 +140,10 @@ fn parse_conditions_from_body(node: &ConfigNode) -> Result<BashConditions, Confi
     let mut conditions = BashConditions::default();
     for child in node.body_nodes() {
         let line = child.line;
-        let glob_at_line = |msg: String| ConfigError::ParseError(format!("line {line}: {msg}"));
-        let err_at_line = |e: ConfigError| match e {
-            ConfigError::ParseError(msg) => ConfigError::ParseError(format!("line {line}: {msg}")),
-            other => other,
+        let glob_at_line = |msg: String| ConfigError::InvalidSyntax(format!("line {line}: {msg}"));
+        let err_at_line = |e: ConfigError| {
+            let ConfigError::InvalidSyntax(msg) = e;
+            ConfigError::InvalidSyntax(format!("line {line}: {msg}"))
         };
 
         match child.name.as_str() {
@@ -197,12 +197,12 @@ fn parse_argument_pattern(
 ) -> Result<crate::domain::rule::bash::ArgumentPattern, ConfigError> {
     let parts: Vec<&str> = value.splitn(2, ' ').collect();
     if parts.len() != 2 {
-        return Err(ConfigError::ParseError(format!(
+        return Err(ConfigError::InvalidSyntax(format!(
             "required-arguments entry must have flag and value pattern: '{value}'"
         )));
     }
     let flag = parts[0].to_string();
-    let pattern = compile_glob(parts[1]).map_err(ConfigError::ParseError)?;
+    let pattern = compile_glob(parts[1]).map_err(ConfigError::InvalidSyntax)?;
     Ok(crate::domain::rule::bash::ArgumentPattern {
         flag,
         value: pattern,

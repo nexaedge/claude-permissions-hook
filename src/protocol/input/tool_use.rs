@@ -8,6 +8,7 @@ use crate::domain::CommandSegment;
 use crate::domain::FileOperation;
 use crate::domain::FileTarget;
 use crate::domain::PolicySet;
+use crate::error::ToolParseError;
 
 use super::RawHookInput;
 
@@ -25,15 +26,6 @@ pub enum ToolUse {
     Unknown { tool_name: String },
 }
 
-/// Error from parsing a known tool's input at the protocol boundary.
-///
-/// Carries the policy set (for config-gated fail-closed behavior) and
-/// a human-readable reason (for the hook output message).
-#[derive(Debug)]
-pub struct ToolParseError {
-    pub category: PolicySet,
-    pub reason: String,
-}
 
 /// A valid, parsed Bash tool invocation.
 ///
@@ -122,15 +114,15 @@ fn file_operation(tool_name: &str) -> FileOperation {
 }
 
 fn bash_err(reason: impl Into<String>) -> Result<ToolUse, ToolParseError> {
-    Err(ToolParseError {
-        category: PolicySet::Bash,
+    Err(ToolParseError::InvalidInput {
+        policy_set: PolicySet::Bash,
         reason: reason.into(),
     })
 }
 
 fn file_err(reason: impl Into<String>) -> ToolParseError {
-    ToolParseError {
-        category: PolicySet::File,
+    ToolParseError::InvalidInput {
+        policy_set: PolicySet::File,
         reason: reason.into(),
     }
 }
@@ -285,7 +277,10 @@ mod tests {
     fn bash_empty_command_err() {
         let result = parse("Bash", json!({"command": ""}));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().category, PolicySet::Bash);
+        assert!(matches!(
+            result.unwrap_err(),
+            ToolParseError::InvalidInput { policy_set: PolicySet::Bash, .. }
+        ));
     }
 
     #[test]
@@ -374,7 +369,10 @@ mod tests {
     fn read_missing_file_path_err() {
         let result = parse("Read", json!({}));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().category, PolicySet::File);
+        assert!(matches!(
+            result.unwrap_err(),
+            ToolParseError::InvalidInput { policy_set: PolicySet::File, .. }
+        ));
     }
 
     #[test]

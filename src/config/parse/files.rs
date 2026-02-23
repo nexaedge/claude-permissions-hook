@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::config::ConfigError;
+use crate::error::ConfigError;
 use crate::domain::rule::files::{FileRule, PathPattern};
 use crate::domain::FileOperation;
 
@@ -33,7 +33,7 @@ fn parse_file_nodes(nodes: &[ConfigNode]) -> Result<Vec<FileRule>, ConfigError> 
         let decision = parse_tier(&node.name, node.line)?;
 
         if node.arguments.is_empty() {
-            return Err(ConfigError::ParseError(format!(
+            return Err(ConfigError::InvalidSyntax(format!(
                 "line {}: {} node has no path entries",
                 node.line, node.name
             )));
@@ -43,7 +43,7 @@ fn parse_file_nodes(nodes: &[ConfigNode]) -> Result<Vec<FileRule>, ConfigError> 
 
         for raw_path in &node.arguments {
             let expanded = crate::config::normalize::files::expand_home(raw_path).map_err(|e| {
-                ConfigError::ParseError(format!(
+                ConfigError::InvalidSyntax(format!(
                     "line {}: failed to expand path \"{raw_path}\": {e}",
                     node.line
                 ))
@@ -75,7 +75,7 @@ fn parse_operations_from_body(node: &ConfigNode) -> Result<HashSet<FileOperation
                         "glob" => FileOperation::Glob,
                         "grep" => FileOperation::Grep,
                         unknown => {
-                            return Err(ConfigError::ParseError(format!(
+                            return Err(ConfigError::InvalidSyntax(format!(
                                 "line {}: unknown file operation \"{unknown}\"; expected read, write, edit, glob, or grep",
                                 child.line
                             )));
@@ -85,7 +85,7 @@ fn parse_operations_from_body(node: &ConfigNode) -> Result<HashSet<FileOperation
                 }
             }
             other => {
-                return Err(ConfigError::ParseError(format!(
+                return Err(ConfigError::InvalidSyntax(format!(
                     "line {}: unexpected node \"{other}\" in files rule; expected operations",
                     child.line
                 )));

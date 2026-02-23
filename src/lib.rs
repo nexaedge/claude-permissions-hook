@@ -1,6 +1,7 @@
 pub mod config;
 pub mod decision;
 pub mod domain;
+pub mod error;
 pub mod protocol;
 
 pub(crate) mod cli;

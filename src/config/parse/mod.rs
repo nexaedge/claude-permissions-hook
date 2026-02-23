@@ -2,7 +2,7 @@ pub(crate) mod bash;
 pub(crate) mod files;
 
 use crate::config::document::{ConfigDocument, ParseNode};
-use crate::config::ConfigError;
+use crate::error::ConfigError;
 
 /// Unified KDL intermediate representation for a single config node.
 ///
@@ -61,7 +61,7 @@ pub(super) fn parse_tier(name: &str, line: usize) -> Result<crate::domain::Decis
         "allow" => Ok(crate::domain::Decision::Allow),
         "deny" => Ok(crate::domain::Decision::Deny),
         "ask" => Ok(crate::domain::Decision::Ask),
-        other => Err(ConfigError::ParseError(format!(
+        other => Err(ConfigError::InvalidSyntax(format!(
             "line {line}: unknown tier \"{other}\"; expected allow, deny, or ask"
         ))),
     }

@@ -20,26 +20,16 @@ pub(super) struct ParseNode<'a> {
 
 impl ConfigDocument {
     /// Parse a KDL source string into a document.
-    pub(super) fn parse(source: &str) -> Result<Self, super::ConfigError> {
+    pub(super) fn parse(source: &str) -> Result<Self, crate::error::ConfigError> {
         let doc: kdl::KdlDocument = source
             .parse()
-            .map_err(|e: kdl::KdlError| super::ConfigError::ParseError(e.to_string()))?;
+            .map_err(|e: kdl::KdlError| {
+                crate::error::ConfigError::InvalidSyntax(e.to_string())
+            })?;
         Ok(Self {
             doc,
             source: source.to_string(),
         })
-    }
-
-    /// Load and parse a KDL config file.
-    pub(super) fn load(path: &std::path::Path) -> Result<Self, super::ConfigError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                super::ConfigError::NotFound(path.to_path_buf())
-            } else {
-                super::ConfigError::ReadError(e)
-            }
-        })?;
-        Self::parse(&content)
     }
 
     /// Iterate over all top-level nodes in the document.
