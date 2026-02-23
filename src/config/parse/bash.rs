@@ -1,7 +1,7 @@
 use crate::config::normalize::bash::normalize_subcommand_chains;
-use crate::error::ConfigError;
 use crate::domain::rule::bash::{compile_glob, BashConditions, BashRule};
 use crate::domain::Decision;
+use crate::error::ConfigError;
 
 use super::{parse_tier, ConfigNode};
 

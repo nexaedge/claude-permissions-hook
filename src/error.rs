@@ -17,7 +17,10 @@ pub enum ToolParseError {
     UnknownTool { tool_name: String },
     /// Known policy set but malformed input — CLI returns Ask or no opinion.
     #[error("{reason}")]
-    InvalidInput { policy_set: PolicySet, reason: String },
+    InvalidInput {
+        policy_set: PolicySet,
+        reason: String,
+    },
 }
 
 /// Error from parsing hook JSON input into a valid request.

@@ -23,9 +23,7 @@ impl ConfigDocument {
     pub(super) fn parse(source: &str) -> Result<Self, crate::error::ConfigError> {
         let doc: kdl::KdlDocument = source
             .parse()
-            .map_err(|e: kdl::KdlError| {
-                crate::error::ConfigError::InvalidSyntax(e.to_string())
-            })?;
+            .map_err(|e: kdl::KdlError| crate::error::ConfigError::InvalidSyntax(e.to_string()))?;
         Ok(Self {
             doc,
             source: source.to_string(),

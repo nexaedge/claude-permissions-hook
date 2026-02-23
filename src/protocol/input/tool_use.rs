@@ -26,7 +26,6 @@ pub enum ToolUse {
     Unknown { tool_name: String },
 }
 
-
 /// A valid, parsed Bash tool invocation.
 ///
 /// Invariant: `segments` is non-empty and contains successfully parsed programs.
@@ -279,7 +278,10 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            ToolParseError::InvalidInput { policy_set: PolicySet::Bash, .. }
+            ToolParseError::InvalidInput {
+                policy_set: PolicySet::Bash,
+                ..
+            }
         ));
     }
 
@@ -371,7 +373,10 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            ToolParseError::InvalidInput { policy_set: PolicySet::File, .. }
+            ToolParseError::InvalidInput {
+                policy_set: PolicySet::File,
+                ..
+            }
         ));
     }
 

@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use crate::error::ConfigError;
 use crate::domain::rule::files::{FileRule, PathPattern};
 use crate::domain::FileOperation;
+use crate::error::ConfigError;
 
 use super::{parse_tier, ConfigNode};
 
