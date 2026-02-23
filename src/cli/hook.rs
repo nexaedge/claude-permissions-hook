@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::Config;
 use crate::decision;
+use crate::domain::Decision;
 use crate::protocol::HookOutput;
 
 /// Discover config path when `--config` is not provided.
@@ -72,8 +73,31 @@ fn execute_from_stdin(
 ) -> Result<Option<HookOutput>, Box<dyn std::error::Error>> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
-    let hook_input = serde_json::from_str(&input)?;
-    Ok(decision::evaluate(&hook_input, config))
+    let hook_input: crate::protocol::HookInput = serde_json::from_str(&input)?;
+
+    let Some(config) = config else {
+        return Ok(Some(HookOutput::ask(
+            "No config file provided — run with --config to enable rule-based decisions",
+        )));
+    };
+
+    let request = hook_input.to_request();
+    let result = decision::evaluate(
+        &request,
+        &hook_input.cwd,
+        &hook_input.permission_mode,
+        config,
+    );
+    Ok(result.map(|(decision, reason)| to_hook_output(decision, reason)))
+}
+
+/// Convert a domain decision + reason into the protocol's HookOutput.
+fn to_hook_output(decision: Decision, reason: String) -> HookOutput {
+    match decision {
+        Decision::Allow => HookOutput::allow(reason),
+        Decision::Ask => HookOutput::ask(reason),
+        Decision::Deny => HookOutput::deny(reason),
+    }
 }
 
 /// Serialize a HookOutput to JSON and print to stdout.

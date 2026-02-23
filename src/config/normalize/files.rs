@@ -12,7 +12,7 @@ pub(crate) fn expand_home(pattern: &str) -> Result<String, PathError> {
     if !pattern.contains("<home>") && !pattern.starts_with('~') {
         return Ok(pattern.to_string());
     }
-    let home = crate::path::home_dir()?;
+    let home = crate::domain::path::home_dir()?;
     let result = pattern.replace("<home>", &home);
     if let Some(rest) = result.strip_prefix('~') {
         Ok(format!("{home}{rest}"))

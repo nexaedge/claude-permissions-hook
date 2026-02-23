@@ -1,9 +1,22 @@
+pub mod command_segment;
+pub mod decision;
 pub mod file_operation;
 pub mod flag;
 pub mod path;
+pub mod permission_mode;
 pub mod program_name;
+pub mod resolved_path;
+pub(crate) mod rule;
+pub mod tool_category;
+pub mod tool_request;
 
+pub use command_segment::CommandSegment;
+pub use decision::Decision;
 pub use file_operation::FileOperation;
 pub use flag::Flag;
 pub use path::PathError;
+pub use permission_mode::PermissionMode;
 pub use program_name::ProgramName;
+pub use resolved_path::ResolvedPath;
+pub use tool_category::ToolCategory;
+pub use tool_request::ToolRequest;

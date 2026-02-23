@@ -1,6 +1,6 @@
 use crate::decision::aggregation::{aggregate_decisions, apply_mode_modifier};
-use crate::protocol::output::Decision;
-use crate::protocol::PermissionMode;
+use crate::domain::Decision;
+use crate::domain::PermissionMode;
 
 /// aggregate_decisions() test case.
 macro_rules! aggregate_test {

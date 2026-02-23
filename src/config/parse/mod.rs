@@ -56,14 +56,11 @@ fn convert_nodes(nodes: &[ParseNode<'_>]) -> Vec<ConfigNode> {
 /// Parse a decision tier name into a `Decision`.
 ///
 /// Used by both bash and files parsers. Returns `Err` for unknown tiers.
-pub(super) fn parse_tier(
-    name: &str,
-    line: usize,
-) -> Result<crate::protocol::Decision, ConfigError> {
+pub(super) fn parse_tier(name: &str, line: usize) -> Result<crate::domain::Decision, ConfigError> {
     match name {
-        "allow" => Ok(crate::protocol::Decision::Allow),
-        "deny" => Ok(crate::protocol::Decision::Deny),
-        "ask" => Ok(crate::protocol::Decision::Ask),
+        "allow" => Ok(crate::domain::Decision::Allow),
+        "deny" => Ok(crate::domain::Decision::Deny),
+        "ask" => Ok(crate::domain::Decision::Ask),
         other => Err(ConfigError::ParseError(format!(
             "line {line}: unknown tier \"{other}\"; expected allow, deny, or ask"
         ))),

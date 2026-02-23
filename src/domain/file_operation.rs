@@ -1,3 +1,5 @@
+use std::fmt;
+
 /// Identifies which file tool operation is being performed.
 ///
 /// A domain concept shared across protocol and config layers.
@@ -10,4 +12,16 @@ pub enum FileOperation {
     Edit,
     Glob,
     Grep,
+}
+
+impl fmt::Display for FileOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FileOperation::Read => write!(f, "read"),
+            FileOperation::Write => write!(f, "write"),
+            FileOperation::Edit => write!(f, "edit"),
+            FileOperation::Glob => write!(f, "glob"),
+            FileOperation::Grep => write!(f, "grep"),
+        }
+    }
 }

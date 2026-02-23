@@ -180,14 +180,13 @@ fn flow_home_unset_file_tool_returns_valid_json() {
     assert_eq!(exit_code, 0, "binary must not panic; stderr: {stderr}");
     let value: serde_json::Value = serde_json::from_str(stdout.trim())
         .expect("stdout must be valid JSON even when $HOME is unset");
-    // Fail-closed: $HOME unset → path.expanded is Err → lookup returns Ask.
-    // The deny rule `~/.ssh/**` has an unexpandable pattern, so any path lookup
-    // must return Ask (not deny, not allow, not empty).
+    // Config load fails because `~/.ssh/**` requires $HOME expansion.
+    // The CLI surfaces this as an ask with a config error message.
     let decision = value["hookSpecificOutput"]["permissionDecision"]
         .as_str()
         .expect("expected permissionDecision in output");
     assert_eq!(
         decision, "ask",
-        "expected fail-closed ask when $HOME is unset"
+        "expected ask when config fails to load due to $HOME unset"
     );
 }

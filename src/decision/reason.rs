@@ -1,5 +1,4 @@
-use crate::domain::FileOperation;
-use crate::protocol::output::Decision;
+use crate::domain::Decision;
 
 use super::APP_NAME;
 
@@ -52,17 +51,6 @@ pub(crate) fn build_reason(
                 )
             }
         }
-    }
-}
-
-/// Convert a FileOperation to its lowercase string for reason messages.
-pub(crate) fn operation_str(op: FileOperation) -> &'static str {
-    match op {
-        FileOperation::Read => "read",
-        FileOperation::Write => "write",
-        FileOperation::Edit => "edit",
-        FileOperation::Glob => "glob",
-        FileOperation::Grep => "grep",
     }
 }
 

@@ -1,11 +1,21 @@
 mod aggregation;
 mod bash;
+mod domain_level;
 mod files;
 mod reason;
 
 use crate::config::Config;
+use crate::domain::Decision;
 use crate::protocol::HookInput;
 use serde_json::json;
+
+/// Convenience wrapper: converts HookInput → domain types and calls evaluate.
+fn eval(input: &HookInput, config: Option<&Config>) -> Option<(Decision, String)> {
+    let request = input.to_request();
+    config.and_then(|cfg| {
+        crate::decision::evaluate(&request, &input.cwd, &input.permission_mode, cfg)
+    })
+}
 
 fn make_input(tool_name: &str, permission_mode: &str, tool_input: serde_json::Value) -> HookInput {
     serde_json::from_value(json!({
@@ -27,21 +37,21 @@ fn bash_input(command: &str, mode: &str) -> HookInput {
 
 fn rules_of_with_decision(
     programs: &[&str],
-    decision: crate::protocol::Decision,
-) -> Vec<crate::config::rule::BashRule> {
+    decision: crate::domain::Decision,
+) -> Vec<crate::domain::rule::bash::BashRule> {
     programs
         .iter()
-        .map(|p| crate::config::rule::BashRule {
+        .map(|p| crate::domain::rule::bash::BashRule {
             decision: decision.clone(),
-            program: crate::domain::ProgramName::new(p),
-            conditions: crate::config::rule::BashConditions::default(),
+            program: crate::domain::ProgramName::parse(p).unwrap(),
+            conditions: crate::domain::rule::bash::BashConditions::default(),
         })
         .collect()
 }
 
 fn make_config(allow: &[&str], deny: &[&str], ask: &[&str]) -> Config {
-    use crate::protocol::Decision;
-    let mut bash: crate::config::BashConfig = Vec::new();
+    use crate::domain::Decision;
+    let mut bash: crate::domain::rule::bash::BashConfig = Vec::new();
     bash.extend(rules_of_with_decision(allow, Decision::Allow));
     bash.extend(rules_of_with_decision(deny, Decision::Deny));
     bash.extend(rules_of_with_decision(ask, Decision::Ask));

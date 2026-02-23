@@ -1,4 +1,4 @@
-use crate::config::rule::BashConditions;
+use crate::domain::rule::bash::BashConditions;
 
 /// When a rule has both an inline subcommand (from rule string) and children
 /// `subcommands` chains, the children are relative to the inline position.

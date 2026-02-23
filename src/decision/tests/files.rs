@@ -1,8 +1,8 @@
-use super::{make_config, make_input};
-use crate::config::files::{FileOperation, FileRule, FilesConfig, PathPattern};
+use super::{eval, make_config, make_input};
 use crate::config::Config;
-use crate::decision::evaluate;
-use crate::protocol::output::Decision;
+use crate::domain::rule::files::{FileRule, FilesConfig, PathPattern};
+use crate::domain::Decision;
+use crate::domain::FileOperation;
 use serde_json::json;
 use std::collections::HashSet;
 
@@ -20,7 +20,7 @@ fn file_rule(pattern: &str, decision: Decision, ops: &[FileOperation]) -> FileRu
         decision,
         path: PathPattern {
             raw: pattern.to_string(),
-            expanded: crate::config::normalize::files::expand_home(pattern),
+            expanded: crate::config::normalize::files::expand_home(pattern).unwrap(),
         },
         operations: ops.iter().copied().collect::<HashSet<_>>(),
     }
@@ -44,10 +44,7 @@ fn file_input(tool: &str, mode: &str, tool_input: serde_json::Value) -> crate::p
 
 /// Extract decision from evaluate result.
 fn file_decision(input: &crate::protocol::HookInput, config: &Config) -> Decision {
-    evaluate(input, Some(config))
-        .unwrap()
-        .hook_specific_output
-        .permission_decision
+    eval(input, Some(config)).unwrap().0
 }
 
 // ---- Read file in CWD allow rule → allow ----
@@ -136,7 +133,7 @@ fn file_no_files_config_returns_none() {
     // Config with bash only, no files section
     let config = make_config(&["git"], &[], &[]);
     let input = file_input("Read", "default", json!({"file_path": "/tmp/test.txt"}));
-    assert!(evaluate(&input, Some(&config)).is_none());
+    assert!(eval(&input, Some(&config)).is_none());
 }
 
 // ---- Deny > ask > allow precedence ----
@@ -208,7 +205,7 @@ fn file_operation_mismatch_returns_none() {
     let config = make_files_config(vec![allow_rule("/**", &[FileOperation::Read])]);
     // Write tool but allow rule only has read → no match → None
     let input = file_input("Write", "default", json!({"file_path": "/tmp/test.txt"}));
-    assert!(evaluate(&input, Some(&config)).is_none());
+    assert!(eval(&input, Some(&config)).is_none());
 }
 
 // ---- Variable expansion in rules ----
@@ -297,13 +294,7 @@ fn file_config_with_both_bash_and_files() {
     };
     // Bash still evaluates independently
     let bash_in = super::bash_input("git status", "default");
-    assert_eq!(
-        evaluate(&bash_in, Some(&config))
-            .unwrap()
-            .hook_specific_output
-            .permission_decision,
-        Decision::Allow
-    );
+    assert_eq!(eval(&bash_in, Some(&config)).unwrap().0, Decision::Allow);
     // File tools also evaluate independently
     let read_in = file_input(
         "Read",
@@ -319,7 +310,7 @@ fn file_config_with_both_bash_and_files() {
 fn unknown_tool_with_files_config_returns_none() {
     let config = make_files_config(vec![allow_rule("/**", &[FileOperation::Read])]);
     let input = make_input("NotebookEdit", "default", json!({}));
-    assert!(evaluate(&input, Some(&config)).is_none());
+    assert!(eval(&input, Some(&config)).is_none());
 }
 
 // ---- Path normalization in evaluation ----

@@ -3,9 +3,10 @@ pub mod tool_use;
 use serde::Deserialize;
 use serde_json::Value;
 
-pub use tool_use::{
-    BashToolUse, FileToolUse, ResolvedPath, ToolCategory, ToolParseError, ToolUse,
-};
+use crate::domain::PermissionMode;
+use crate::domain::ResolvedPath;
+use crate::domain::ToolRequest;
+pub use tool_use::{BashToolUse, FileToolUse, ToolParseError, ToolUse};
 
 /// The input received from Claude Code on stdin for a PreToolUse hook.
 ///
@@ -23,6 +24,60 @@ pub struct HookInput {
     pub tool_use_id: String,
 }
 
+impl HookInput {
+    /// Convert protocol input into domain `ToolRequest` for the decision layer.
+    ///
+    /// Maps protocol `ToolUse` variants to domain `ToolRequest`.
+    pub fn to_request(&self) -> ToolRequest {
+        match &self.tool_use {
+            Ok(ToolUse::Bash(ref bash)) => ToolRequest::Bash {
+                segments: bash.segments.clone(),
+            },
+            Ok(ToolUse::File(ref file)) => ToolRequest::File {
+                operation: file.operation,
+                paths: file
+                    .paths
+                    .iter()
+                    .map(|p| ResolvedPath {
+                        raw: p.raw.clone(),
+                        normalized: p.normalized.clone(),
+                    })
+                    .collect(),
+            },
+            Ok(ToolUse::Unknown { .. }) => ToolRequest::Unknown,
+            Err(err) => ToolRequest::ParseError {
+                category: err.category,
+                reason: err.reason.clone(),
+            },
+        }
+    }
+}
+
+/// Wire permission mode — camelCase variant names matching Claude Code's JSON.
+///
+/// Deserialized from wire format and converted to domain `PermissionMode`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum WirePermissionMode {
+    Default,
+    Plan,
+    AcceptEdits,
+    DontAsk,
+    BypassPermissions,
+}
+
+impl From<WirePermissionMode> for PermissionMode {
+    fn from(wire: WirePermissionMode) -> Self {
+        match wire {
+            WirePermissionMode::Default => PermissionMode::Default,
+            WirePermissionMode::Plan => PermissionMode::Plan,
+            WirePermissionMode::AcceptEdits => PermissionMode::AcceptEdits,
+            WirePermissionMode::DontAsk => PermissionMode::DontAsk,
+            WirePermissionMode::BypassPermissions => PermissionMode::BypassPermissions,
+        }
+    }
+}
+
 /// Raw wire format — mirrors the JSON that Claude Code sends.
 ///
 /// Passed to `ToolUse::parse` as context so helpers can access `tool_name`
@@ -32,7 +87,7 @@ struct RawHookInput {
     session_id: String,
     transcript_path: String,
     cwd: String,
-    permission_mode: PermissionMode,
+    permission_mode: WirePermissionMode,
     hook_event_name: String,
     tool_name: String,
     tool_input: Value,
@@ -50,23 +105,12 @@ impl<'de> Deserialize<'de> for HookInput {
             session_id: raw.session_id,
             transcript_path: raw.transcript_path,
             cwd: raw.cwd,
-            permission_mode: raw.permission_mode,
+            permission_mode: raw.permission_mode.into(),
             hook_event_name: raw.hook_event_name,
             tool_use,
             tool_use_id: raw.tool_use_id,
         })
     }
-}
-
-/// Claude Code's permission modes.
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum PermissionMode {
-    Default,
-    Plan,
-    AcceptEdits,
-    DontAsk,
-    BypassPermissions,
 }
 
 #[cfg(test)]

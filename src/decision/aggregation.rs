@@ -1,5 +1,5 @@
-use crate::protocol::output::Decision;
-use crate::protocol::PermissionMode;
+use crate::domain::Decision;
+use crate::domain::PermissionMode;
 
 /// Aggregate multiple per-program decisions into a single decision.
 ///

@@ -1,7 +1,7 @@
 use crate::config::normalize::bash::normalize_subcommand_chains;
-use crate::config::rule::{self, compile_glob, BashConditions};
 use crate::config::ConfigError;
-use crate::protocol::Decision;
+use crate::domain::rule::bash::{compile_glob, BashConditions, BashRule};
+use crate::domain::Decision;
 
 use super::{parse_tier, ConfigNode};
 
@@ -10,7 +10,7 @@ use super::{parse_tier, ConfigNode};
 /// Returns `None` when the section is absent or empty.
 pub(in crate::config) fn parse_bash(
     config_nodes: &[ConfigNode],
-) -> Result<Option<Vec<rule::BashRule>>, ConfigError> {
+) -> Result<Option<Vec<BashRule>>, ConfigError> {
     match ConfigNode::body_of(config_nodes, "bash") {
         Some(rule_nodes) => parse_bash_nodes(rule_nodes).map(Some),
         None => Ok(None),
@@ -22,7 +22,7 @@ pub(in crate::config) fn parse_bash(
 /// Caller guarantees `nodes` is non-empty.
 pub(in crate::config) fn parse_bash_nodes(
     nodes: &[ConfigNode],
-) -> Result<Vec<rule::BashRule>, ConfigError> {
+) -> Result<Vec<BashRule>, ConfigError> {
     let mut rules = Vec::new();
     for node in nodes {
         let decision = parse_tier(&node.name, node.line)?;
@@ -55,7 +55,7 @@ fn parse_single_rule(
     decision: Decision,
     mut extra_conditions: BashConditions,
     line: usize,
-) -> Result<rule::BashRule, ConfigError> {
+) -> Result<BashRule, ConfigError> {
     let at_line = |e: ConfigError| match e {
         ConfigError::ParseError(msg) => ConfigError::ParseError(format!("line {line}: {msg}")),
         other => other,
@@ -71,9 +71,11 @@ fn parse_single_rule(
     // Simple program name: no whitespace → empty inline conditions
     if trimmed.split_whitespace().nth(1).is_none() {
         // Apply body conditions directly (no inline subcommand to normalize)
-        return Ok(rule::BashRule {
+        let program = crate::domain::ProgramName::parse(trimmed)
+            .map_err(|_| ConfigError::ParseError(format!("line {line}: empty program name")))?;
+        return Ok(BashRule {
             decision,
-            program: crate::domain::ProgramName::new(trimmed),
+            program,
             conditions: extra_conditions,
         });
     }
@@ -126,7 +128,7 @@ fn parse_single_rule(
     // Normalize inline subcommand with children subcommand chains
     normalize_subcommand_chains(&mut inline_conditions);
 
-    Ok(rule::BashRule {
+    Ok(BashRule {
         decision,
         program: segment.program,
         conditions: inline_conditions,
@@ -190,7 +192,9 @@ fn parse_conditions_from_body(node: &ConfigNode) -> Result<BashConditions, Confi
 }
 
 /// Parse a `required-arguments` entry: `"--upload-file *"` -> ArgumentPattern.
-fn parse_argument_pattern(value: &str) -> Result<rule::ArgumentPattern, ConfigError> {
+fn parse_argument_pattern(
+    value: &str,
+) -> Result<crate::domain::rule::bash::ArgumentPattern, ConfigError> {
     let parts: Vec<&str> = value.splitn(2, ' ').collect();
     if parts.len() != 2 {
         return Err(ConfigError::ParseError(format!(
@@ -199,7 +203,7 @@ fn parse_argument_pattern(value: &str) -> Result<rule::ArgumentPattern, ConfigEr
     }
     let flag = parts[0].to_string();
     let pattern = compile_glob(parts[1]).map_err(ConfigError::ParseError)?;
-    Ok(rule::ArgumentPattern {
+    Ok(crate::domain::rule::bash::ArgumentPattern {
         flag,
         value: pattern,
     })
@@ -208,7 +212,6 @@ fn parse_argument_pattern(value: &str) -> Result<rule::ArgumentPattern, ConfigEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::rule::BashRule;
     use std::collections::HashSet;
 
     fn flag_set(items: &[&str]) -> HashSet<crate::domain::Flag> {

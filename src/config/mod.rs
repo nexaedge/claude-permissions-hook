@@ -1,15 +1,11 @@
-pub(crate) mod bash;
-mod document;
-pub(crate) mod files;
-mod match_rule;
+pub(crate) mod document;
 pub(crate) mod normalize;
 pub(crate) mod parse;
-pub(crate) mod rule;
 
 use std::path::{Path, PathBuf};
 
-pub(crate) use bash::BashConfig;
-pub(crate) use files::FilesConfig;
+use crate::domain::rule::bash::BashConfig;
+use crate::domain::rule::files::FilesConfig;
 
 use document::ConfigDocument;
 

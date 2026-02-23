@@ -1,17 +1,14 @@
-use super::{bash_input, make_config, make_input};
-use crate::config::files::{FileOperation, FileRule, FilesConfig, PathPattern};
+use super::{bash_input, eval, make_config, make_input};
 use crate::config::Config;
-use crate::decision::evaluate;
-use crate::protocol::output::Decision;
+use crate::domain::rule::files::{FileRule, FilesConfig, PathPattern};
+use crate::domain::Decision;
+use crate::domain::FileOperation;
 use serde_json::json;
 use std::collections::HashSet;
 
-/// Helper to extract the reason string from an evaluate() result.
+/// Helper to extract the reason string from an eval() result.
 fn reason_of(input: &crate::protocol::HookInput, config: &Config) -> String {
-    evaluate(input, Some(config))
-        .unwrap()
-        .hook_specific_output
-        .permission_decision_reason
+    eval(input, Some(config)).unwrap().1
 }
 
 /// Build a FileRule from a pattern, decision, and list of operations.
@@ -20,7 +17,7 @@ fn file_rule(pattern: &str, decision: Decision, ops: &[FileOperation]) -> FileRu
         decision,
         path: PathPattern {
             raw: pattern.to_string(),
-            expanded: crate::config::normalize::files::expand_home(pattern),
+            expanded: crate::config::normalize::files::expand_home(pattern).unwrap(),
         },
         operations: ops.iter().copied().collect::<HashSet<_>>(),
     }
@@ -38,10 +35,7 @@ fn file_input(tool: &str, mode: &str, tool_input: serde_json::Value) -> crate::p
 }
 
 fn file_reason(input: &crate::protocol::HookInput, config: &Config) -> String {
-    evaluate(input, Some(config))
-        .unwrap()
-        .hook_specific_output
-        .permission_decision_reason
+    eval(input, Some(config)).unwrap().1
 }
 
 // ---- Bash reason message tests ----

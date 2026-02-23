@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
-use crate::config::files::{FileOperation, FileRule, FilesConfig, PathPattern};
 use crate::config::ConfigError;
+use crate::domain::rule::files::{FileRule, FilesConfig, PathPattern};
+use crate::domain::FileOperation;
 
 use super::{parse_tier, ConfigNode};
 
@@ -41,7 +42,12 @@ fn parse_file_nodes(nodes: &[ConfigNode]) -> Result<Vec<FileRule>, ConfigError> 
         let operations = parse_operations_from_body(node)?;
 
         for raw_path in &node.arguments {
-            let expanded = crate::config::normalize::files::expand_home(raw_path);
+            let expanded = crate::config::normalize::files::expand_home(raw_path).map_err(|e| {
+                ConfigError::ParseError(format!(
+                    "line {}: failed to expand path \"{raw_path}\": {e}",
+                    node.line
+                ))
+            })?;
             let path = PathPattern {
                 raw: raw_path.clone(),
                 expanded,
@@ -92,7 +98,7 @@ fn parse_operations_from_body(node: &ConfigNode) -> Result<HashSet<FileOperation
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::files::FileOperation;
+    use crate::domain::FileOperation;
 
     fn parse_files_from_source(source: &str) -> Result<Option<FilesConfig>, ConfigError> {
         let wrapped = format!("files {{\n{source}\n}}");
@@ -273,9 +279,6 @@ mod tests {
     fn tilde_home_expansion() {
         let home = std::env::var("HOME").unwrap();
         let config = files(r#"deny "~/.ssh/**""#);
-        assert_eq!(
-            config[0].path.expanded.as_ref().unwrap(),
-            &format!("{home}/.ssh/**")
-        );
+        assert_eq!(config[0].path.expanded, format!("{home}/.ssh/**"));
     }
 }

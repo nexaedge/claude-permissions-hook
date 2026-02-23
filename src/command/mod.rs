@@ -1,13 +1,6 @@
 use brush_parser::ast;
 
-use crate::domain::ProgramName;
-
-/// A parsed segment of a shell command, representing one program invocation.
-#[derive(Debug, PartialEq)]
-pub struct CommandSegment {
-    pub program: ProgramName,
-    pub args: Vec<String>,
-}
+use crate::domain::{CommandSegment, ProgramName};
 
 /// Error returned when a command string cannot be parsed.
 #[derive(Debug, thiserror::Error)]
@@ -118,11 +111,10 @@ fn visit_command(command: &ast::Command, segments: &mut Vec<CommandSegment>) {
                     }
 
                     // Not a wrapper (or wrapper with no arguments) — emit as-is
-                    let args = extract_args_from_suffix(&simple.suffix);
-                    segments.push(CommandSegment {
-                        program: ProgramName::new(&name),
-                        args,
-                    });
+                    if let Ok(program) = ProgramName::parse(&name) {
+                        let args = extract_args_from_suffix(&simple.suffix);
+                        segments.push(CommandSegment { program, args });
+                    }
                 }
             }
         }
@@ -191,11 +183,10 @@ fn extract_wrapped_programs(
                     continue;
                 }
                 // Found the actual target program — collect remaining items as args
-                let args = collect_remaining_args(&mut items);
-                result.push(CommandSegment {
-                    program: ProgramName::new(&prog),
-                    args,
-                });
+                if let Ok(program) = ProgramName::parse(&prog) {
+                    let args = collect_remaining_args(&mut items);
+                    result.push(CommandSegment { program, args });
+                }
                 break;
             }
             NextProgram::FromSplitString(mut segments) => {
@@ -839,5 +830,19 @@ mod tests {
     #[test]
     fn expand_flags_three_chars() {
         assert_eq!(expand_flags("-rvf"), vec!["-r", "-v", "-f"]);
+    }
+
+    // --- Empty basename edge cases ---
+
+    #[test]
+    fn bare_slash_yields_no_programs() {
+        // "/" has no basename — should produce empty segments, not panic
+        assert_eq!(programs("/"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn env_wrapper_with_bare_slash_falls_back_to_env() {
+        // "env /" — wrapper target "/" has no basename, so wrapper itself is emitted
+        assert_eq!(programs("env /"), vec!["env"]);
     }
 }

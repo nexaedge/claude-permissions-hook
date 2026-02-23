@@ -1,9 +1,71 @@
 use std::collections::HashSet;
 
-use crate::command::CommandSegment;
-use crate::config::rule::{ArgumentPattern, BashRule};
+use globset::GlobMatcher;
+
+use crate::domain::CommandSegment;
+use crate::domain::{Decision, Flag, ProgramName};
+
+/// A parsed rule for a bash program with optional conditions.
+///
+/// Created from KDL config entries like `deny "rm -rf /"` or children blocks.
+#[derive(Debug)]
+pub(crate) struct BashRule {
+    pub(crate) decision: Decision,
+    pub(crate) program: ProgramName,
+    pub(crate) conditions: BashConditions,
+}
+
+/// Conditions that must be met for a rule to match a command.
+///
+/// An empty `BashConditions` (all fields empty/default) means the rule matches
+/// any invocation of the program — backwards compatible with v0.2.0.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct BashConditions {
+    /// Flags that must ALL be present (AND semantics).
+    pub(crate) required_flags: HashSet<Flag>,
+    /// Flags where ANY one triggers the rule (OR semantics).
+    pub(crate) optional_flags: HashSet<Flag>,
+    /// Ordered prefix from rule string non-flag args (e.g., `["push"]` from `git push --force`).
+    pub(crate) subcommand: Vec<String>,
+    /// Glob patterns for positional arguments (any order).
+    pub(crate) positionals: Vec<PositionalPattern>,
+    /// Flag+value pairs that must be present (e.g., `--upload-file *.txt`).
+    pub(crate) required_arguments: Vec<ArgumentPattern>,
+    /// OR list of ordered subcommand chains from children blocks.
+    pub(crate) subcommands: Vec<Vec<String>>,
+}
+
+/// A glob pattern for matching positional arguments.
+#[derive(Debug, Clone)]
+pub(crate) struct PositionalPattern {
+    /// Original pattern string for display/debugging.
+    #[allow(dead_code)]
+    pub(crate) raw: String,
+    /// Compiled glob matcher.
+    pub(crate) matcher: GlobMatcher,
+}
+
+/// A flag+value pattern for matching arguments like `--upload-file *.txt`.
+#[derive(Debug, Clone)]
+pub(crate) struct ArgumentPattern {
+    /// The flag (e.g., `"--upload-file"`).
+    pub(crate) flag: String,
+    /// Glob pattern for the value.
+    pub(crate) value: PositionalPattern,
+}
 
 impl BashRule {
+    /// Returns true when conditions are all empty — backwards-compatible unconditional match.
+    #[cfg(test)]
+    pub(crate) fn is_unconditional(&self) -> bool {
+        self.conditions.required_flags.is_empty()
+            && self.conditions.optional_flags.is_empty()
+            && self.conditions.subcommand.is_empty()
+            && self.conditions.positionals.is_empty()
+            && self.conditions.required_arguments.is_empty()
+            && self.conditions.subcommands.is_empty()
+    }
+
     /// Check whether a parsed command segment satisfies this rule's conditions.
     ///
     /// All non-empty conditions must pass (AND semantics).
@@ -100,6 +162,29 @@ impl BashRule {
     }
 }
 
+/// Compile a glob pattern string into a `PositionalPattern`.
+///
+/// Uses `literal_separator(true)` so `*` does not match `/` — standard
+/// filesystem glob semantics where `/*` matches `/tmp` but not `/home/user`.
+///
+/// Returns `Err` with a message if the pattern is invalid.
+pub(crate) fn compile_glob(raw: &str) -> Result<PositionalPattern, String> {
+    let glob = globset::GlobBuilder::new(raw)
+        .literal_separator(true)
+        .build()
+        .map_err(|e| format!("invalid glob pattern '{raw}': {e}"))?;
+    Ok(PositionalPattern {
+        raw: raw.to_string(),
+        matcher: glob.compile_matcher(),
+    })
+}
+
+/// Bash-specific configuration: a flat ordered list of rules.
+///
+/// Rules carry their own `decision` field (allow/deny/ask). Lookup applies
+/// severity ordering: deny > ask > allow.
+pub(crate) type BashConfig = Vec<BashRule>;
+
 /// Classify command args into flags and positionals.
 ///
 /// Flags start with `-` (not `-` alone or `--`). `--` marks end-of-options:
@@ -167,13 +252,49 @@ fn find_argument_value(args: &[String], req: &ArgumentPattern) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::rule::compile_glob;
-    use crate::config::rule::{ArgumentPattern, BashConditions, BashRule};
-    use crate::protocol::Decision;
+
+    // --- Tests from config/rule.rs ---
+
+    #[test]
+    fn unconditional_rule_with_empty_conditions() {
+        let rule = BashRule {
+            decision: Decision::Deny,
+            program: ProgramName::parse("rm").unwrap(),
+            conditions: BashConditions::default(),
+        };
+        assert!(rule.is_unconditional());
+    }
+
+    #[test]
+    fn conditional_rule_with_flags() {
+        let mut conditions = BashConditions::default();
+        conditions.required_flags.insert(Flag::new("-r"));
+        let rule = BashRule {
+            decision: Decision::Deny,
+            program: ProgramName::parse("rm").unwrap(),
+            conditions,
+        };
+        assert!(!rule.is_unconditional());
+    }
+
+    #[test]
+    fn compile_valid_glob() {
+        let pattern = compile_glob("/*").unwrap();
+        assert_eq!(pattern.raw, "/*");
+        assert!(pattern.matcher.is_match("/tmp"));
+    }
+
+    #[test]
+    fn compile_invalid_glob_returns_error() {
+        let result = compile_glob("[invalid");
+        assert!(result.is_err());
+    }
+
+    // --- Tests from config/match_rule/bash.rs ---
 
     fn seg(program: &str, args: &[&str]) -> CommandSegment {
         CommandSegment {
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             args: args.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -181,7 +302,7 @@ mod tests {
     fn rule(program: &str) -> BashRule {
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions: BashConditions::default(),
         }
     }
@@ -189,13 +310,11 @@ mod tests {
     fn rule_required_flags(program: &str, flags: &[&str]) -> BashRule {
         let mut conditions = BashConditions::default();
         for f in flags {
-            conditions
-                .required_flags
-                .insert(crate::domain::Flag::new(f));
+            conditions.required_flags.insert(Flag::new(f));
         }
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions,
         }
     }
@@ -203,13 +322,11 @@ mod tests {
     fn rule_optional_flags(program: &str, flags: &[&str]) -> BashRule {
         let mut conditions = BashConditions::default();
         for f in flags {
-            conditions
-                .optional_flags
-                .insert(crate::domain::Flag::new(f));
+            conditions.optional_flags.insert(Flag::new(f));
         }
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions,
         }
     }
@@ -217,7 +334,7 @@ mod tests {
     fn rule_subcommand(program: &str, subcmd: &[&str]) -> BashRule {
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions: BashConditions {
                 subcommand: subcmd.iter().map(|s| s.to_string()).collect(),
                 ..Default::default()
@@ -232,7 +349,7 @@ mod tests {
         }
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions,
         }
     }
@@ -246,7 +363,7 @@ mod tests {
         }
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions,
         }
     }
@@ -261,7 +378,7 @@ mod tests {
         }
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions,
         }
     }
@@ -470,7 +587,7 @@ mod tests {
     ) -> BashRule {
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions: BashConditions {
                 subcommand: subcmd.iter().map(|s| s.to_string()).collect(),
                 positionals: patterns.iter().map(|p| compile_glob(p).unwrap()).collect(),
@@ -621,13 +738,13 @@ mod tests {
     fn rule_subcommands_with_flags(program: &str, chains: &[&[&str]], flags: &[&str]) -> BashRule {
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions: BashConditions {
                 subcommands: chains
                     .iter()
                     .map(|c| c.iter().map(|s| s.to_string()).collect())
                     .collect(),
-                required_flags: flags.iter().map(|s| crate::domain::Flag::new(s)).collect(),
+                required_flags: flags.iter().map(|s| Flag::new(s)).collect(),
                 ..Default::default()
             },
         }
@@ -693,36 +810,30 @@ mod tests {
 
     #[test]
     fn match_classification_standard_flags() {
-        // ["-r", "-f", "/tmp"] → flags: {-r, -f}, positionals: ["/tmp"]
         let r = rule_required_flags("rm", &["-r", "-f"]);
         assert!(r.matches(&seg("rm", &["-r", "-f", "/tmp"])));
     }
 
     #[test]
     fn match_classification_flag_position_irrelevant() {
-        // ["/", "-r", "-f"] → flags: {-r, -f}, positionals: ["/"]
         let r = rule_required_flags("rm", &["-r", "-f"]);
         assert!(r.matches(&seg("rm", &["/", "-r", "-f"])));
     }
 
     #[test]
     fn match_classification_double_dash_stops_flags() {
-        // ["--", "-rf", "/tmp"] → flags: {}, positionals: ["-rf", "/tmp"]
-        // Required flag "-r" should NOT be found (no flags after --)
         let r = rule_required_flags("rm", &["-r"]);
         assert!(!r.matches(&seg("rm", &["--", "-rf", "/tmp"])));
     }
 
     #[test]
     fn match_classification_stdin_dash_is_positional() {
-        // ["-", "file"] → flags: {}, positionals: ["-", "file"]
         let r = rule_positionals("cat", &["-"]);
         assert!(r.matches(&seg("cat", &["-", "file"])));
     }
 
     #[test]
     fn match_classification_long_flag() {
-        // ["--force", "push"] → flags: {"--force"}, positionals: ["push"]
         let r = rule_required_flags("git", &["--force"]);
         assert!(r.matches(&seg("git", &["--force", "push"])));
     }
@@ -743,7 +854,6 @@ mod tests {
 
     #[test]
     fn no_match_required_argument_after_double_dash() {
-        // curl -- --upload-file data.txt → flag after -- is positional, not a flag
         let r = rule_required_arguments("curl", &[("--upload-file", "*")]);
         assert!(!r.matches(&seg("curl", &["--", "--upload-file", "data.txt"])));
     }
@@ -756,7 +866,6 @@ mod tests {
 
     #[test]
     fn match_required_argument_before_double_dash() {
-        // --upload-file before -- is still a valid flag
         let r = rule_required_arguments("curl", &[("--upload-file", "*")]);
         assert!(r.matches(&seg("curl", &["--upload-file", "data.txt", "--", "url"])));
     }
@@ -770,7 +879,7 @@ mod tests {
     ) -> BashRule {
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions: BashConditions {
                 subcommands: chains
                     .iter()
@@ -784,28 +893,24 @@ mod tests {
 
     #[test]
     fn match_subcommands_and_positionals_both_pass() {
-        // deny "git" { subcommands "push"; remotes "origin" }
         let r = rule_subcommands_with_positionals("git", &[&["push"]], &["origin"]);
         assert!(r.matches(&seg("git", &["push", "origin", "main"])));
     }
 
     #[test]
     fn no_match_subcommands_ok_positionals_missing() {
-        // git push upstream → "origin" not in positionals
         let r = rule_subcommands_with_positionals("git", &[&["push"]], &["origin"]);
         assert!(!r.matches(&seg("git", &["push", "upstream", "main"])));
     }
 
     #[test]
     fn no_match_positionals_ok_subcommands_wrong() {
-        // git pull origin → "pull" doesn't match subcommands ["push"]
         let r = rule_subcommands_with_positionals("git", &[&["push"]], &["origin"]);
         assert!(!r.matches(&seg("git", &["pull", "origin"])));
     }
 
     #[test]
     fn match_subcommands_and_positionals_with_flags() {
-        // git --force push origin main → flags stripped, subcommands "push" matches, "origin" in positionals
         let r = rule_subcommands_with_positionals("git", &[&["push"]], &["origin"]);
         assert!(r.matches(&seg("git", &["--force", "push", "origin", "main"])));
     }
@@ -819,13 +924,13 @@ mod tests {
     ) -> BashRule {
         BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new(program),
+            program: ProgramName::parse(program).unwrap(),
             conditions: BashConditions {
                 subcommands: chains
                     .iter()
                     .map(|c| c.iter().map(|s| s.to_string()).collect())
                     .collect(),
-                optional_flags: flags.iter().map(|s| crate::domain::Flag::new(s)).collect(),
+                optional_flags: flags.iter().map(|s| Flag::new(s)).collect(),
                 ..Default::default()
             },
         }
@@ -863,7 +968,6 @@ mod tests {
 
     #[test]
     fn match_empty_subcommands_matches_any() {
-        // Empty subcommands = no subcommand restriction
         let r = rule_subcommands("git", &[]);
         assert!(r.matches(&seg("git", &["push", "origin"])));
     }
@@ -875,20 +979,12 @@ mod tests {
     }
 
     // --- Group 14: Subcommand + Subcommands Both Set (Matching-Level AND) ---
-    //
-    // The parser normalizes inline+children by prepending `subcommand` to `subcommands`
-    // chains and clearing `subcommand`. These tests verify the raw matching-level AND
-    // behavior when both fields are manually set — a scenario that no longer arises from
-    // normal parsing, but validates that the matcher handles it correctly. See mod.rs
-    // for e2e parser normalization tests.
 
     #[test]
     fn match_inline_subcommand_and_children_subcommands_both_pass() {
-        // subcommand: ["push"], subcommands: [["push", "origin"]]
-        // Actual: "push origin main" → subcommand prefix ["push"] ✓, chain ["push","origin"] ✓
         let r = BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new("git"),
+            program: ProgramName::parse("git").unwrap(),
             conditions: BashConditions {
                 subcommand: vec!["push".to_string()],
                 subcommands: vec![vec!["push".to_string(), "origin".to_string()]],
@@ -900,10 +996,9 @@ mod tests {
 
     #[test]
     fn no_match_inline_subcommand_ok_children_subcommands_miss() {
-        // subcommand: ["push"] ✓, subcommands: [["push","origin"]] ✗ (upstream ≠ origin)
         let r = BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new("git"),
+            program: ProgramName::parse("git").unwrap(),
             conditions: BashConditions {
                 subcommand: vec!["push".to_string()],
                 subcommands: vec![vec!["push".to_string(), "origin".to_string()]],
@@ -915,10 +1010,9 @@ mod tests {
 
     #[test]
     fn no_match_children_subcommands_ok_inline_subcommand_miss() {
-        // subcommand: ["push"] ✗ (pull ≠ push), subcommands: [["pull"]] would pass but moot
         let r = BashRule {
             decision: Decision::Deny,
-            program: crate::domain::ProgramName::new("git"),
+            program: ProgramName::parse("git").unwrap(),
             conditions: BashConditions {
                 subcommand: vec!["push".to_string()],
                 subcommands: vec![vec!["pull".to_string()]],

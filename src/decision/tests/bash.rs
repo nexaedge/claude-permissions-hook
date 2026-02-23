@@ -1,7 +1,6 @@
-use super::{bash_input, make_config, make_input, rules_of_with_decision};
+use super::{bash_input, eval, make_config, make_input, rules_of_with_decision};
 use crate::config::Config;
-use crate::decision::evaluate;
-use crate::protocol::output::Decision;
+use crate::domain::Decision;
 use serde_json::json;
 
 // ---- Test macros ----
@@ -15,8 +14,8 @@ macro_rules! bash_decision_test {
         fn $name() {
             let config = make_config(&[$($a),*], &[$($d),*], &[$($q),*]);
             let input = bash_input($cmd, $mode);
-            let result = evaluate(&input, Some(&config)).unwrap();
-            assert_eq!(result.hook_specific_output.permission_decision, $decision);
+            let (decision, _reason) = eval(&input, Some(&config)).unwrap();
+            assert_eq!(decision, $decision);
         }
     };
 }
@@ -29,7 +28,7 @@ macro_rules! bash_none_test {
         fn $name() {
             let config = make_config(&[$($a),*], &[$($d),*], &[$($q),*]);
             let input = bash_input($cmd, $mode);
-            assert!(evaluate(&input, Some(&config)).is_none());
+            assert!(eval(&input, Some(&config)).is_none());
         }
     };
 }
@@ -41,31 +40,23 @@ macro_rules! non_bash_none_test {
         fn $name() {
             let config = make_config(&["git"], &["rm"], &[]);
             let input = make_input($tool, "default", json!({}));
-            assert!(evaluate(&input, Some(&config)).is_none());
+            assert!(eval(&input, Some(&config)).is_none());
         }
     };
 }
 
-// ---- No config ----
+// ---- No config → None (CLI layer handles fallback) ----
 
 #[test]
-fn no_config_bash_tool_returns_ask() {
+fn no_config_bash_tool_returns_none() {
     let input = bash_input("ls", "default");
-    let output = evaluate(&input, None).unwrap();
-    assert_eq!(
-        output.hook_specific_output.permission_decision,
-        Decision::Ask
-    );
+    assert!(eval(&input, None).is_none());
 }
 
 #[test]
-fn no_config_non_bash_tool_returns_ask() {
+fn no_config_non_bash_tool_returns_none() {
     let input = make_input("Read", "default", json!({"file_path": "/tmp/x"}));
-    let output = evaluate(&input, None).unwrap();
-    assert_eq!(
-        output.hook_specific_output.permission_decision,
-        Decision::Ask
-    );
+    assert!(eval(&input, None).is_none());
 }
 
 // ---- Non-Bash tools with config → None ----
@@ -140,44 +131,32 @@ bash_decision_test!(default_with_ask_returns_ask,
 fn bash_tool_without_command_field_returns_ask() {
     let config = make_config(&["git"], &[], &[]);
     let input = make_input("Bash", "default", json!({"description": "something"}));
-    let result = evaluate(&input, Some(&config)).unwrap();
-    assert_eq!(
-        result.hook_specific_output.permission_decision,
-        Decision::Ask
-    );
+    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
+    assert_eq!(decision, Decision::Ask);
 }
 
 #[test]
 fn empty_command_returns_ask() {
     let config = make_config(&["git"], &[], &[]);
     let input = bash_input("", "default");
-    let result = evaluate(&input, Some(&config)).unwrap();
-    assert_eq!(
-        result.hook_specific_output.permission_decision,
-        Decision::Ask
-    );
+    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
+    assert_eq!(decision, Decision::Ask);
 }
 
 #[test]
 fn whitespace_command_returns_ask() {
     let config = make_config(&["git"], &[], &[]);
     let input = bash_input("   ", "default");
-    let result = evaluate(&input, Some(&config)).unwrap();
-    assert_eq!(
-        result.hook_specific_output.permission_decision,
-        Decision::Ask
-    );
+    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
+    assert_eq!(decision, Decision::Ask);
 }
 
 #[test]
 fn parse_error_returns_ask() {
     let config = make_config(&["git"], &[], &[]);
     let input = bash_input("git add . &&", "default");
-    let result = evaluate(&input, Some(&config)).unwrap();
-    assert_eq!(
-        result.hook_specific_output.permission_decision,
-        Decision::Ask
-    );
+    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
+    assert_eq!(decision, Decision::Ask);
 }
 
 #[test]
@@ -185,11 +164,8 @@ fn no_programs_extracted_returns_ask() {
     let config = make_config(&["git"], &[], &[]);
     // Arithmetic expression parses but yields no program segments
     let input = bash_input("(( x + 1 ))", "default");
-    let result = evaluate(&input, Some(&config)).unwrap();
-    assert_eq!(
-        result.hook_specific_output.permission_decision,
-        Decision::Ask
-    );
+    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
+    assert_eq!(decision, Decision::Ask);
 }
 
 // ---- Path normalization: absolute paths match basename ----
@@ -266,21 +242,21 @@ bash_decision_test!(wrapper_env_split_string_deny,
     allow: [], deny: ["rm"], ask: [],
     expect: Decision::Deny);
 
-// ---- Conditional rule fallthrough through evaluate() ----
+// ---- Conditional rule fallthrough through eval() ----
 
 /// Build a Config with conditional rules for decision-layer tests.
-fn config_with_conditional_rules(rules: Vec<crate::config::rule::BashRule>) -> Config {
+fn config_with_conditional_rules(rules: Vec<crate::domain::rule::bash::BashRule>) -> Config {
     Config {
         bash: Some(rules),
         ..Default::default()
     }
 }
 
-fn conditional_deny_rule(program: &str, flags: &[&str]) -> crate::config::rule::BashRule {
-    crate::config::rule::BashRule {
+fn conditional_deny_rule(program: &str, flags: &[&str]) -> crate::domain::rule::bash::BashRule {
+    crate::domain::rule::bash::BashRule {
         decision: Decision::Deny,
-        program: crate::domain::ProgramName::new(program),
-        conditions: crate::config::rule::BashConditions {
+        program: crate::domain::ProgramName::parse(program).unwrap(),
+        conditions: crate::domain::rule::bash::BashConditions {
             required_flags: flags.iter().map(|s| crate::domain::Flag::new(s)).collect(),
             ..Default::default()
         },
@@ -294,11 +270,8 @@ fn conditional_deny_miss_falls_through_to_allow() {
     let config = config_with_conditional_rules(rules);
     // rm file.txt — deny condition misses (no -r -f), allow matches → Allow
     let input = bash_input("rm file.txt", "default");
-    let result = evaluate(&input, Some(&config)).unwrap();
-    assert_eq!(
-        result.hook_specific_output.permission_decision,
-        Decision::Allow
-    );
+    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
+    assert_eq!(decision, Decision::Allow);
 }
 
 #[test]
@@ -308,9 +281,6 @@ fn conditional_deny_miss_falls_through_to_ask() {
     let config = config_with_conditional_rules(rules);
     // rm file.txt — deny condition misses, ask matches → Ask
     let input = bash_input("rm file.txt", "default");
-    let result = evaluate(&input, Some(&config)).unwrap();
-    assert_eq!(
-        result.hook_specific_output.permission_decision,
-        Decision::Ask
-    );
+    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
+    assert_eq!(decision, Decision::Ask);
 }

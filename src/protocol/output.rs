@@ -1,4 +1,7 @@
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::Serialize;
+
+use crate::domain::Decision;
 
 /// The output returned to Claude Code on stdout.
 #[derive(Debug, Serialize)]
@@ -13,7 +16,8 @@ impl HookOutput {
     /// # Examples
     ///
     /// ```
-    /// use claude_permissions_hook::protocol::{HookOutput, Decision};
+    /// use claude_permissions_hook::protocol::HookOutput;
+    /// use claude_permissions_hook::domain::Decision;
     ///
     /// let output = HookOutput::allow("git is allowed");
     /// assert_eq!(output.hook_specific_output.permission_decision, Decision::Allow);
@@ -27,7 +31,8 @@ impl HookOutput {
     /// # Examples
     ///
     /// ```
-    /// use claude_permissions_hook::protocol::{HookOutput, Decision};
+    /// use claude_permissions_hook::protocol::HookOutput;
+    /// use claude_permissions_hook::domain::Decision;
     ///
     /// let output = HookOutput::ask("needs human confirmation");
     /// assert_eq!(output.hook_specific_output.permission_decision, Decision::Ask);
@@ -41,7 +46,8 @@ impl HookOutput {
     /// # Examples
     ///
     /// ```
-    /// use claude_permissions_hook::protocol::{HookOutput, Decision};
+    /// use claude_permissions_hook::protocol::HookOutput;
+    /// use claude_permissions_hook::domain::Decision;
     ///
     /// let output = HookOutput::deny("blocked by rule");
     /// assert_eq!(output.hook_specific_output.permission_decision, Decision::Deny);
@@ -62,34 +68,34 @@ impl HookOutput {
 }
 
 /// PreToolUse-specific output containing the permission decision.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 pub struct PreToolUseOutput {
     pub hook_event_name: String,
     pub permission_decision: Decision,
     pub permission_decision_reason: String,
 }
 
-/// The permission decision: allow, ask, or deny.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Decision {
-    Allow,
-    Ask,
-    Deny,
-}
-
-impl Decision {
-    /// Explicit severity ranking: Allow(0) < Ask(1) < Deny(2).
-    ///
-    /// Used by aggregation to select the most restrictive decision.
-    /// Explicit mapping prevents accidental breakage from enum reordering.
-    pub fn severity(&self) -> u8 {
-        match self {
-            Decision::Allow => 0,
-            Decision::Ask => 1,
-            Decision::Deny => 2,
-        }
+/// Custom Serialize for PreToolUseOutput: serializes Decision as lowercase wire format.
+///
+/// Keeps the domain `Decision` type free of serde concerns while producing
+/// the camelCase JSON that Claude Code expects.
+impl Serialize for PreToolUseOutput {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("PreToolUseOutput", 3)?;
+        state.serialize_field("hookEventName", &self.hook_event_name)?;
+        state.serialize_field(
+            "permissionDecision",
+            match &self.permission_decision {
+                Decision::Allow => "allow",
+                Decision::Ask => "ask",
+                Decision::Deny => "deny",
+            },
+        )?;
+        state.serialize_field("permissionDecisionReason", &self.permission_decision_reason)?;
+        state.end()
     }
 }
 
@@ -112,20 +118,6 @@ mod tests {
                     "permissionDecisionReason": "test reason"
                 }
             })
-        );
-    }
-
-    #[test]
-    fn decision_severity_allow_less_than_ask_less_than_deny() {
-        assert!(Decision::Allow.severity() < Decision::Ask.severity());
-        assert!(Decision::Ask.severity() < Decision::Deny.severity());
-        assert!(Decision::Allow.severity() < Decision::Deny.severity());
-
-        // max_by_key(severity) should return most restrictive
-        let decisions = vec![Decision::Allow, Decision::Deny, Decision::Ask];
-        assert_eq!(
-            decisions.into_iter().max_by_key(|d| d.severity()),
-            Some(Decision::Deny)
         );
     }
 

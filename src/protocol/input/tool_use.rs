@@ -1,39 +1,24 @@
 use serde_json::Value;
 
-use crate::command::{self, CommandSegment};
-use crate::path;
+use crate::command;
+use crate::domain::path;
+use crate::domain::CommandSegment;
+use crate::domain::FileOperation;
+use crate::domain::ResolvedPath;
+use crate::domain::ToolCategory;
 
 use super::RawHookInput;
-
-/// Which config section a tool belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolCategory {
-    Bash,
-    File,
-}
 
 /// Typed representation of a tool invocation, parsed and validated at the protocol boundary.
 ///
 /// Every variant carries guaranteed-valid data — the decision layer receives types
 /// that make invalid states unrepresentable ("parse, don't validate").
-///
-/// File tools preserve their individual identity (Read, Write, Edit, Glob, Grep)
-/// rather than collapsing into a single variant. The decision layer maps these
-/// to operations internally.
 #[derive(Debug)]
 pub enum ToolUse {
     /// Bash command with successfully parsed program segments.
     Bash(BashToolUse),
-    /// Read tool with resolved file path.
-    Read(FileToolUse),
-    /// Write tool with resolved file path.
-    Write(FileToolUse),
-    /// Edit tool with resolved file path.
-    Edit(FileToolUse),
-    /// Glob tool with resolved search path.
-    Glob(FileToolUse),
-    /// Grep tool with resolved search path.
-    Grep(FileToolUse),
+    /// File tool (Read/Write/Edit/Glob/Grep) with resolved paths and operation.
+    File(FileToolUse),
     /// Unrecognized tool — hook has no opinion.
     Unknown { tool_name: String },
 }
@@ -60,20 +45,12 @@ pub struct BashToolUse {
 /// A valid, resolved file tool invocation.
 ///
 /// Invariant: `paths` is non-empty and all paths are normalized.
-/// The specific file operation (Read, Write, Edit, Glob, Grep) is encoded
-/// by the `ToolUse` variant, not stored here.
+/// The `operation` identifies which file tool was invoked (Read, Write, Edit, Glob, Grep).
 #[derive(Debug)]
 pub struct FileToolUse {
+    pub operation: FileOperation,
+    pub tool_name: String,
     pub paths: Vec<ResolvedPath>,
-}
-
-/// A file path that has been both extracted and normalized.
-#[derive(Debug)]
-pub struct ResolvedPath {
-    /// Original path from tool_input (for display in reason messages).
-    pub raw: String,
-    /// Normalized absolute path (for config matching).
-    pub normalized: String,
 }
 
 impl ToolUse {
@@ -88,12 +65,26 @@ impl ToolUse {
         match ctx.tool_name.as_str() {
             "Bash" => parse_bash(&ctx.tool_input),
             "Read" | "Write" | "Edit" => {
-                let wrap = Self::file_constructor(&ctx.tool_name);
-                parse_required_path(extract_string(&ctx.tool_input, "file_path"), ctx).map(wrap)
+                let operation = file_operation(&ctx.tool_name);
+                parse_required_path(extract_string(&ctx.tool_input, "file_path"), ctx).map(
+                    |paths| {
+                        ToolUse::File(FileToolUse {
+                            operation,
+                            tool_name: ctx.tool_name.clone(),
+                            paths,
+                        })
+                    },
+                )
             }
             "Glob" | "Grep" => {
-                let wrap = Self::file_constructor(&ctx.tool_name);
-                parse_optional_path(extract_string(&ctx.tool_input, "path"), ctx).map(wrap)
+                let operation = file_operation(&ctx.tool_name);
+                parse_optional_path(extract_string(&ctx.tool_input, "path"), ctx).map(|paths| {
+                    ToolUse::File(FileToolUse {
+                        operation,
+                        tool_name: ctx.tool_name.clone(),
+                        paths,
+                    })
+                })
             }
             _ => Ok(ToolUse::Unknown {
                 tool_name: ctx.tool_name.clone(),
@@ -105,39 +96,26 @@ impl ToolUse {
     pub fn tool_name(&self) -> &str {
         match self {
             ToolUse::Bash(_) => "Bash",
-            ToolUse::Read(_) => "Read",
-            ToolUse::Write(_) => "Write",
-            ToolUse::Edit(_) => "Edit",
-            ToolUse::Glob(_) => "Glob",
-            ToolUse::Grep(_) => "Grep",
+            ToolUse::File(f) => &f.tool_name,
             ToolUse::Unknown { tool_name } => tool_name,
         }
     }
 
     /// Returns `true` if this is a file tool variant.
     pub fn is_file_tool(&self) -> bool {
-        matches!(
-            self,
-            ToolUse::Read(_)
-                | ToolUse::Write(_)
-                | ToolUse::Edit(_)
-                | ToolUse::Glob(_)
-                | ToolUse::Grep(_)
-        )
+        matches!(self, ToolUse::File(_))
     }
+}
 
-    /// Maps a tool name to its `ToolUse` variant constructor.
-    ///
-    /// Panics if `tool_name` is not a known file tool.
-    fn file_constructor(tool_name: &str) -> fn(FileToolUse) -> ToolUse {
-        match tool_name {
-            "Read" => ToolUse::Read,
-            "Write" => ToolUse::Write,
-            "Edit" => ToolUse::Edit,
-            "Glob" => ToolUse::Glob,
-            "Grep" => ToolUse::Grep,
-            _ => unreachable!("file_constructor called with non-file tool: {tool_name}"),
-        }
+/// Map tool name to file operation.
+fn file_operation(tool_name: &str) -> FileOperation {
+    match tool_name {
+        "Read" => FileOperation::Read,
+        "Write" => FileOperation::Write,
+        "Edit" => FileOperation::Edit,
+        "Glob" => FileOperation::Glob,
+        "Grep" => FileOperation::Grep,
+        _ => unreachable!("file_operation called with non-file tool: {tool_name}"),
     }
 }
 
@@ -185,7 +163,7 @@ fn parse_bash(tool_input: &Value) -> Result<ToolUse, ToolParseError> {
 fn parse_required_path(
     raw_path: Option<String>,
     ctx: &RawHookInput,
-) -> Result<FileToolUse, ToolParseError> {
+) -> Result<Vec<ResolvedPath>, ToolParseError> {
     let raw_path = match raw_path {
         Some(p) => p,
         None => {
@@ -202,17 +180,17 @@ fn parse_required_path(
 fn parse_optional_path(
     raw_path: Option<String>,
     ctx: &RawHookInput,
-) -> Result<FileToolUse, ToolParseError> {
+) -> Result<Vec<ResolvedPath>, ToolParseError> {
     let p = raw_path.unwrap_or_else(|| ctx.cwd.clone());
     resolve_paths(vec![p], &ctx.cwd, ctx)
 }
 
-/// Normalize raw paths into a `FileToolUse`.
+/// Normalize raw paths into resolved paths.
 fn resolve_paths(
     raw_paths: Vec<String>,
     cwd: &str,
     ctx: &RawHookInput,
-) -> Result<FileToolUse, ToolParseError> {
+) -> Result<Vec<ResolvedPath>, ToolParseError> {
     let mut resolved = Vec::with_capacity(raw_paths.len());
     for rp in raw_paths {
         match path::normalize(&rp, cwd) {
@@ -228,7 +206,7 @@ fn resolve_paths(
             }
         }
     }
-    Ok(FileToolUse { paths: resolved })
+    Ok(resolved)
 }
 
 /// Extract a non-empty string field from JSON.
@@ -243,7 +221,7 @@ fn extract_string(value: &Value, field: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::input::PermissionMode;
+    use crate::protocol::input::WirePermissionMode;
     use serde_json::json;
 
     const CWD: &str = "/home/user/project";
@@ -253,7 +231,7 @@ mod tests {
             session_id: "s".to_string(),
             transcript_path: "/tmp/t.json".to_string(),
             cwd: CWD.to_string(),
-            permission_mode: PermissionMode::Default,
+            permission_mode: WirePermissionMode::Default,
             hook_event_name: "PreToolUse".to_string(),
             tool_name: tool_name.to_string(),
             tool_input,
@@ -264,6 +242,22 @@ mod tests {
     /// Shorthand: parse from raw helper.
     fn parse(name: &str, tool_input: serde_json::Value) -> Result<ToolUse, ToolParseError> {
         ToolUse::parse(&raw(name, tool_input))
+    }
+
+    /// Helper to extract paths from a file tool variant.
+    fn file_paths(tool_use: &ToolUse) -> &[ResolvedPath] {
+        match tool_use {
+            ToolUse::File(f) => &f.paths,
+            other => panic!("expected file tool, got {other:?}"),
+        }
+    }
+
+    /// Helper to extract operation from a file tool variant.
+    fn file_op(tool_use: &ToolUse) -> FileOperation {
+        match tool_use {
+            ToolUse::File(f) => f.operation,
+            other => panic!("expected file tool, got {other:?}"),
+        }
     }
 
     // ---- Bash: valid → Ok(Bash) ----
@@ -310,22 +304,14 @@ mod tests {
         assert!(parse("Bash", json!({"command": "(( x + 1 ))"})).is_err());
     }
 
-    // ---- File tools: valid → per-tool variants ----
-
-    /// Helper to extract paths from any file tool variant.
-    fn file_paths(tool_use: &ToolUse) -> &[ResolvedPath] {
-        match tool_use {
-            ToolUse::Read(f) | ToolUse::Write(f) | ToolUse::Edit(f) | ToolUse::Glob(f)
-            | ToolUse::Grep(f) => &f.paths,
-            other => panic!("expected file tool, got {other:?}"),
-        }
-    }
+    // ---- File tools: valid → File variant with correct operation ----
 
     #[test]
     fn read_resolves_path() {
         let tool_use = parse("Read", json!({"file_path": "/foo/bar.rs"})).unwrap();
-        assert!(matches!(&tool_use, ToolUse::Read(_)));
+        assert!(matches!(&tool_use, ToolUse::File(_)));
         assert_eq!(tool_use.tool_name(), "Read");
+        assert_eq!(file_op(&tool_use), FileOperation::Read);
         let paths = file_paths(&tool_use);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0].raw, "/foo/bar.rs");
@@ -335,42 +321,46 @@ mod tests {
     #[test]
     fn write_resolves_path() {
         let tool_use = parse("Write", json!({"file_path": "/foo/new.rs"})).unwrap();
-        assert!(matches!(&tool_use, ToolUse::Write(_)));
+        assert!(matches!(&tool_use, ToolUse::File(_)));
+        assert_eq!(file_op(&tool_use), FileOperation::Write);
         assert_eq!(file_paths(&tool_use)[0].raw, "/foo/new.rs");
     }
 
     #[test]
     fn edit_resolves_path() {
         let tool_use = parse("Edit", json!({"file_path": "/foo/lib.rs"})).unwrap();
-        assert!(matches!(&tool_use, ToolUse::Edit(_)));
+        assert!(matches!(&tool_use, ToolUse::File(_)));
+        assert_eq!(file_op(&tool_use), FileOperation::Edit);
         assert_eq!(file_paths(&tool_use)[0].raw, "/foo/lib.rs");
     }
 
     #[test]
     fn glob_extracts_explicit_path() {
         let tool_use = parse("Glob", json!({"pattern": "**/*.rs", "path": "/src"})).unwrap();
-        assert!(matches!(&tool_use, ToolUse::Glob(_)));
+        assert!(matches!(&tool_use, ToolUse::File(_)));
+        assert_eq!(file_op(&tool_use), FileOperation::Glob);
         assert_eq!(file_paths(&tool_use)[0].raw, "/src");
     }
 
     #[test]
     fn glob_no_path_uses_cwd() {
         let tool_use = parse("Glob", json!({"pattern": "**/*.rs"})).unwrap();
-        assert!(matches!(&tool_use, ToolUse::Glob(_)));
+        assert!(matches!(&tool_use, ToolUse::File(_)));
         assert_eq!(file_paths(&tool_use)[0].raw, CWD);
     }
 
     #[test]
     fn grep_extracts_explicit_path() {
         let tool_use = parse("Grep", json!({"pattern": "TODO", "path": "/src"})).unwrap();
-        assert!(matches!(&tool_use, ToolUse::Grep(_)));
+        assert!(matches!(&tool_use, ToolUse::File(_)));
+        assert_eq!(file_op(&tool_use), FileOperation::Grep);
         assert_eq!(file_paths(&tool_use)[0].raw, "/src");
     }
 
     #[test]
     fn grep_no_path_uses_cwd() {
         let tool_use = parse("Grep", json!({"pattern": "TODO"})).unwrap();
-        assert!(matches!(&tool_use, ToolUse::Grep(_)));
+        assert!(matches!(&tool_use, ToolUse::File(_)));
         assert_eq!(file_paths(&tool_use)[0].raw, CWD);
     }
 
@@ -398,14 +388,14 @@ mod tests {
     #[test]
     fn glob_empty_path_defaults_to_cwd() {
         let tool_use = parse("Glob", json!({"pattern": "**/*.rs", "path": ""})).unwrap();
-        assert!(matches!(&tool_use, ToolUse::Glob(_)));
+        assert!(matches!(&tool_use, ToolUse::File(_)));
         assert_eq!(file_paths(&tool_use)[0].raw, CWD);
     }
 
     #[test]
     fn grep_empty_path_defaults_to_cwd() {
         let tool_use = parse("Grep", json!({"pattern": "TODO", "path": ""})).unwrap();
-        assert!(matches!(&tool_use, ToolUse::Grep(_)));
+        assert!(matches!(&tool_use, ToolUse::File(_)));
         assert_eq!(file_paths(&tool_use)[0].raw, CWD);
     }
 
