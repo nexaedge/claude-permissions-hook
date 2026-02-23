@@ -5,7 +5,7 @@ pub mod error;
 pub mod protocol;
 
 pub(crate) mod cli;
-pub(crate) mod command;
+pub(crate) mod shell_parser;
 
 /// Run the hook subcommand: read JSON from stdin, evaluate, write JSON to stdout.
 ///

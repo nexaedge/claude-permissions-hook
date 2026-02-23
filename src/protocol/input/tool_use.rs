@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::command;
+use crate::shell_parser;
 use crate::domain::path;
 use crate::domain::CommandSegment;
 use crate::domain::FileOperation;
@@ -137,7 +137,7 @@ fn parse_bash(tool_input: &Value) -> Result<ToolUse, ToolParseError> {
         return bash_err("Empty bash command");
     }
 
-    let segments = match command::parse(command) {
+    let segments = match shell_parser::parse(command) {
         Ok(segs) => segs,
         Err(e) => return bash_err(format!("Failed to parse command: {e}")),
     };

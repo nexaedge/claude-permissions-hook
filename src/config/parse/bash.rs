@@ -80,8 +80,8 @@ fn parse_single_rule(
         });
     }
 
-    // Parse with command::parse() to get program + args
-    let segments = crate::command::parse(trimmed)
+    // Parse with shell_parser::parse() to get program + args
+    let segments = crate::shell_parser::parse(trimmed)
         .map_err(|e| ConfigError::InvalidSyntax(format!("invalid rule '{trimmed}': {e}")))
         .map_err(&at_line)?;
 
