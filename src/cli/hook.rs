@@ -84,8 +84,8 @@ fn execute_from_stdin(
     // Handle parse errors at the boundary: fail-closed if config exists for that category
     if let Err(ref err) = hook_input.tool_use {
         let has_config = match err.category {
-            crate::domain::PolicySet::Bash => config.bash.is_some(),
-            crate::domain::PolicySet::File => config.files.is_some(),
+            crate::domain::PolicySet::Bash => config.has_bash,
+            crate::domain::PolicySet::File => config.has_files,
         };
         if has_config {
             return Ok(Some(HookOutput::ask(&err.reason)));

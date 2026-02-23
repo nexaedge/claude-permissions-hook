@@ -126,46 +126,44 @@ bash_decision_test!(default_with_ask_returns_ask,
     expect: Decision::Ask);
 
 // ---- Fail-closed edge cases ----
+// Note: parse errors now return None from to_request() — fail-closed
+// behavior (Ask when config exists) is handled at the CLI boundary
+// (cli/hook.rs), not in the decision engine.
 
 #[test]
-fn bash_tool_without_command_field_returns_ask() {
+fn bash_tool_without_command_field_returns_none() {
     let config = make_config(&["git"], &[], &[]);
     let input = make_input("Bash", "default", json!({"description": "something"}));
-    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
-    assert_eq!(decision, Decision::Ask);
+    assert!(eval(&input, Some(&config)).is_none());
 }
 
 #[test]
-fn empty_command_returns_ask() {
+fn empty_command_returns_none() {
     let config = make_config(&["git"], &[], &[]);
     let input = bash_input("", "default");
-    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
-    assert_eq!(decision, Decision::Ask);
+    assert!(eval(&input, Some(&config)).is_none());
 }
 
 #[test]
-fn whitespace_command_returns_ask() {
+fn whitespace_command_returns_none() {
     let config = make_config(&["git"], &[], &[]);
     let input = bash_input("   ", "default");
-    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
-    assert_eq!(decision, Decision::Ask);
+    assert!(eval(&input, Some(&config)).is_none());
 }
 
 #[test]
-fn parse_error_returns_ask() {
+fn parse_error_returns_none() {
     let config = make_config(&["git"], &[], &[]);
     let input = bash_input("git add . &&", "default");
-    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
-    assert_eq!(decision, Decision::Ask);
+    assert!(eval(&input, Some(&config)).is_none());
 }
 
 #[test]
-fn no_programs_extracted_returns_ask() {
+fn no_programs_extracted_returns_none() {
     let config = make_config(&["git"], &[], &[]);
     // Arithmetic expression parses but yields no program segments
     let input = bash_input("(( x + 1 ))", "default");
-    let (decision, _reason) = eval(&input, Some(&config)).unwrap();
-    assert_eq!(decision, Decision::Ask);
+    assert!(eval(&input, Some(&config)).is_none());
 }
 
 // ---- Path normalization: absolute paths match basename ----
@@ -247,7 +245,8 @@ bash_decision_test!(wrapper_env_split_string_deny,
 /// Build a Config with conditional rules for decision-layer tests.
 fn config_with_conditional_rules(rules: Vec<crate::domain::rule::bash::BashRule>) -> Config {
     Config {
-        bash: Some(rules),
+        bash: rules,
+        has_bash: true,
         ..Default::default()
     }
 }

@@ -1,15 +1,16 @@
 use super::{eval, make_config, make_input};
 use crate::config::Config;
-use crate::domain::rule::files::{FileRule, FilesConfig, PathPattern};
+use crate::domain::rule::files::{FileRule, PathPattern};
 use crate::domain::Decision;
 use crate::domain::FileOperation;
 use serde_json::json;
 use std::collections::HashSet;
 
 /// Build a Config with only files config (no bash).
-fn make_files_config(files: FilesConfig) -> Config {
+fn make_files_config(files: Vec<FileRule>) -> Config {
     Config {
-        files: Some(files),
+        files,
+        has_files: true,
         ..Default::default()
     }
 }
@@ -181,21 +182,24 @@ fn file_dont_ask_mode_ask_to_deny() {
     assert_eq!(file_decision(&input, &config), Decision::Deny);
 }
 
-// ---- Fail-closed: missing file_path → ask ----
+// ---- Fail-closed: missing file_path → parse error (None from to_request) ----
+// Note: fail-closed behavior for parse errors is now handled at the CLI boundary
+// (cli/hook.rs), not in the decision engine. These tests verify the domain path
+// returns None for parse errors.
 
 #[test]
-fn file_missing_file_path_fail_closed() {
+fn file_missing_file_path_returns_none() {
     let config = make_files_config(vec![allow_rule("/**", &[FileOperation::Read])]);
-    // Read with no file_path → empty paths → fail-closed ask
+    // Read with no file_path → parse error → to_request returns None
     let input = file_input("Read", "default", json!({}));
-    assert_eq!(file_decision(&input, &config), Decision::Ask);
+    assert!(eval(&input, Some(&config)).is_none());
 }
 
 #[test]
-fn file_missing_file_path_write_fail_closed() {
+fn file_missing_file_path_write_returns_none() {
     let config = make_files_config(vec![allow_rule("/**", &[FileOperation::Write])]);
     let input = file_input("Write", "default", json!({}));
-    assert_eq!(file_decision(&input, &config), Decision::Ask);
+    assert!(eval(&input, Some(&config)).is_none());
 }
 
 // ---- Operation mismatch → no match ----
@@ -289,8 +293,10 @@ fn file_dont_ask_mode_deny_stays_deny() {
 fn file_config_with_both_bash_and_files() {
     use super::rules_of_with_decision;
     let config = Config {
-        bash: Some(rules_of_with_decision(&["git"], Decision::Allow)),
-        files: Some(vec![allow_rule("<cwd>/**", &[FileOperation::Read])]),
+        bash: rules_of_with_decision(&["git"], Decision::Allow),
+        has_bash: true,
+        files: vec![allow_rule("<cwd>/**", &[FileOperation::Read])],
+        has_files: true,
     };
     // Bash still evaluates independently
     let bash_in = super::bash_input("git status", "default");

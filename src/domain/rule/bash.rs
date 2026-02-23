@@ -179,12 +179,6 @@ pub(crate) fn compile_glob(raw: &str) -> Result<PositionalPattern, String> {
     })
 }
 
-/// Bash-specific configuration: a flat ordered list of rules.
-///
-/// Rules carry their own `decision` field (allow/deny/ask). Lookup applies
-/// severity ordering: deny > ask > allow.
-pub(crate) type BashConfig = Vec<BashRule>;
-
 /// Classify command args into flags and positionals.
 ///
 /// Flags start with `-` (not `-` alone or `--`). `--` marks end-of-options:

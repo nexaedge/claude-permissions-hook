@@ -4,8 +4,8 @@ pub(crate) mod parse;
 
 use std::path::{Path, PathBuf};
 
-use crate::domain::rule::bash::BashConfig;
-use crate::domain::rule::files::FilesConfig;
+use crate::domain::rule::bash::BashRule;
+use crate::domain::rule::files::FileRule;
 
 use document::ConfigDocument;
 
@@ -13,10 +13,17 @@ use document::ConfigDocument;
 ///
 /// Other modules access tool configs through this struct without
 /// needing to know about parsing, KDL, or tool-specific modules.
+///
+/// Fields use `Vec` (not `Option<Vec>`) — an absent config section
+/// is represented as an empty vec.
 #[derive(Debug, Default)]
 pub struct Config {
-    pub(crate) bash: Option<BashConfig>,
-    pub(crate) files: Option<FilesConfig>,
+    pub(crate) bash: Vec<BashRule>,
+    pub(crate) files: Vec<FileRule>,
+    /// Whether the bash section was present in the config file.
+    pub(crate) has_bash: bool,
+    /// Whether the files section was present in the config file.
+    pub(crate) has_files: bool,
 }
 
 /// Errors that can occur when loading or parsing a config file.
@@ -64,9 +71,13 @@ impl Config {
 
     fn from_document(doc: &ConfigDocument) -> Result<Self, ConfigError> {
         let config_nodes = parse::section_to_config_nodes(doc);
+        let bash = parse::bash::parse_bash(&config_nodes)?;
+        let files = parse::files::parse_files(&config_nodes)?;
         Ok(Config {
-            bash: parse::bash::parse_bash(&config_nodes)?,
-            files: parse::files::parse_files(&config_nodes)?,
+            has_bash: bash.is_some(),
+            has_files: files.is_some(),
+            bash: bash.unwrap_or_default(),
+            files: files.unwrap_or_default(),
         })
     }
 }

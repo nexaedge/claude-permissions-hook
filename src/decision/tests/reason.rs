@@ -1,6 +1,6 @@
 use super::{bash_input, eval, make_config, make_input};
 use crate::config::Config;
-use crate::domain::rule::files::{FileRule, FilesConfig, PathPattern};
+use crate::domain::rule::files::{FileRule, PathPattern};
 use crate::domain::Decision;
 use crate::domain::FileOperation;
 use serde_json::json;
@@ -23,9 +23,10 @@ fn file_rule(pattern: &str, decision: Decision, ops: &[FileOperation]) -> FileRu
     }
 }
 
-fn make_files_config(files: FilesConfig) -> Config {
+fn make_files_config(files: Vec<FileRule>) -> Config {
     Config {
-        files: Some(files),
+        files,
+        has_files: true,
         ..Default::default()
     }
 }
@@ -213,17 +214,6 @@ fn file_reason_dont_ask_mode() {
     );
 }
 
-#[test]
-fn file_reason_fail_closed() {
-    let config = make_files_config(vec![file_rule(
-        "/**",
-        Decision::Allow,
-        &[FileOperation::Read],
-    )]);
-    let input = file_input("Read", "default", json!({}));
-    let reason = file_reason(&input, &config);
-    assert!(
-        reason.contains("no file path provided"),
-        "expected fail-closed reason, got: {reason}"
-    );
-}
+// Note: fail-closed behavior for parse errors is now handled at the CLI boundary
+// (cli/hook.rs), not in the decision engine. The file_reason_fail_closed test
+// was removed because parse errors no longer flow through the decision engine.

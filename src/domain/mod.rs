@@ -11,9 +11,7 @@ pub mod permission_request;
 pub mod policy;
 pub mod policy_set;
 pub mod program_name;
-pub mod resolved_path;
 pub(crate) mod rule;
-pub mod tool_category;
 pub mod tool_request;
 
 pub use command_segment::CommandSegment;
@@ -29,6 +27,4 @@ pub use permission_request::PermissionRequest;
 pub use policy::Policy;
 pub use policy_set::PolicySet;
 pub use program_name::ProgramName;
-pub use resolved_path::ResolvedPath;
-pub use tool_category::ToolCategory;
 pub use tool_request::ToolRequest;

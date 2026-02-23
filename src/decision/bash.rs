@@ -30,10 +30,12 @@ pub(super) fn evaluate_bash(
     permission_mode: &PermissionMode,
     config: &Config,
 ) -> Option<(Decision, String)> {
-    let bash_config = config.bash.as_ref()?;
+    if config.bash.is_empty() {
+        return None;
+    }
     let per_program: Vec<Option<Decision>> = segments
         .iter()
-        .map(|seg| lookup(bash_config, seg))
+        .map(|seg| lookup(&config.bash, seg))
         .collect();
 
     let aggregated = aggregate_decisions(&per_program);

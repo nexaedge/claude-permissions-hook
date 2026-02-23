@@ -37,7 +37,10 @@ pub(super) fn evaluate_file_tool(
     permission_mode: &PermissionMode,
     config: &Config,
 ) -> Option<(Decision, String)> {
-    let files_config = config.files.as_ref()?;
+    if config.files.is_empty() {
+        return None;
+    }
+    let files_config = &config.files;
 
     let per_path: Vec<Option<Decision>> = targets
         .iter()
@@ -69,7 +72,7 @@ mod tests {
     fn files(source: &str) -> Vec<FileRule> {
         let wrapped = format!("files {{\n{source}\n}}");
         let config = crate::config::Config::parse(&wrapped).expect("parse should succeed");
-        config.files.expect("nodes should produce rules")
+        config.files
     }
 
     // --- Lookup tests ---

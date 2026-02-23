@@ -11,7 +11,7 @@ use serde_json::json;
 
 /// Convenience wrapper: converts HookInput → domain types and calls evaluate.
 fn eval(input: &HookInput, config: Option<&Config>) -> Option<(Decision, String)> {
-    let request = input.to_request();
+    let request = input.to_request()?;
     config.and_then(|cfg| {
         crate::decision::evaluate(&request, &input.cwd, &input.permission_mode, cfg)
     })
@@ -51,12 +51,13 @@ fn rules_of_with_decision(
 
 fn make_config(allow: &[&str], deny: &[&str], ask: &[&str]) -> Config {
     use crate::domain::Decision;
-    let mut bash: crate::domain::rule::bash::BashConfig = Vec::new();
+    let mut bash: Vec<crate::domain::rule::bash::BashRule> = Vec::new();
     bash.extend(rules_of_with_decision(allow, Decision::Allow));
     bash.extend(rules_of_with_decision(deny, Decision::Deny));
     bash.extend(rules_of_with_decision(ask, Decision::Ask));
     Config {
-        bash: Some(bash),
+        bash,
+        has_bash: true,
         ..Default::default()
     }
 }

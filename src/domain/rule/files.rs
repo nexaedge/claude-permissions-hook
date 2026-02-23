@@ -5,11 +5,6 @@ use std::collections::HashSet;
 use crate::domain::Decision;
 use crate::domain::FileOperation;
 
-/// File configuration: a flat ordered list of rules.
-///
-/// Rules are evaluated in order by severity (deny > ask > allow).
-pub(crate) type FilesConfig = Vec<FileRule>;
-
 /// A single file rule binding a path pattern and decision to a set of operations.
 ///
 /// Invariant: all fields are valid — expansion errors are caught at config load time.

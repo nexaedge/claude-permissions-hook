@@ -42,14 +42,16 @@ fn bash_config(allow: &[&str], deny: &[&str], ask: &[&str]) -> Config {
         });
     }
     Config {
-        bash: Some(rules),
+        bash: rules,
+        has_bash: true,
         ..Default::default()
     }
 }
 
 fn files_config(rules: Vec<FileRule>) -> Config {
     Config {
-        files: Some(rules),
+        files: rules,
+        has_files: true,
         ..Default::default()
     }
 }
@@ -270,7 +272,11 @@ fn file_cwd_expansion_matches() {
     )]);
     let request = ToolRequest::File {
         operation: FileOperation::Read,
-        targets: vec![target("/project/src/main.rs", "/project/src/main.rs", "/project")],
+        targets: vec![target(
+            "/project/src/main.rs",
+            "/project/src/main.rs",
+            "/project",
+        )],
     };
     let (d, _) = decide(&request, "/project", PermissionMode::Default, &config).unwrap();
     assert_eq!(d, Decision::Allow);

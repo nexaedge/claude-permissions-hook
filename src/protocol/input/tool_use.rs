@@ -458,6 +458,9 @@ mod tests {
         let tool_use = parse("Read", json!({"file_path": "src/main.rs"})).unwrap();
         let paths = file_targets(&tool_use);
         assert_eq!(paths[0].raw_path, "src/main.rs");
-        assert_eq!(paths[0].normalized_path.to_str().unwrap(), "/home/user/project/src/main.rs");
+        assert_eq!(
+            paths[0].normalized_path.to_str().unwrap(),
+            "/home/user/project/src/main.rs"
+        );
     }
 }

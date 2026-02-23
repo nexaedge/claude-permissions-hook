@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::config::ConfigError;
-use crate::domain::rule::files::{FileRule, FilesConfig, PathPattern};
+use crate::domain::rule::files::{FileRule, PathPattern};
 use crate::domain::FileOperation;
 
 use super::{parse_tier, ConfigNode};
@@ -20,7 +20,7 @@ use super::{parse_tier, ConfigNode};
 /// ```
 pub(in crate::config) fn parse_files(
     config_nodes: &[ConfigNode],
-) -> Result<Option<FilesConfig>, ConfigError> {
+) -> Result<Option<Vec<FileRule>>, ConfigError> {
     match ConfigNode::body_of(config_nodes, "files") {
         Some(rule_nodes) => parse_file_nodes(rule_nodes).map(Some),
         None => Ok(None),
@@ -100,13 +100,13 @@ mod tests {
     use super::*;
     use crate::domain::FileOperation;
 
-    fn parse_files_from_source(source: &str) -> Result<Option<FilesConfig>, ConfigError> {
+    fn parse_files_from_source(source: &str) -> Result<Option<Vec<FileRule>>, ConfigError> {
         let wrapped = format!("files {{\n{source}\n}}");
         let doc = crate::config::document::ConfigDocument::parse(&wrapped)?;
         parse_files(&crate::config::parse::section_to_config_nodes(&doc))
     }
 
-    fn files(source: &str) -> FilesConfig {
+    fn files(source: &str) -> Vec<FileRule> {
         parse_files_from_source(source)
             .expect("parse should succeed")
             .expect("nodes should produce rules")
