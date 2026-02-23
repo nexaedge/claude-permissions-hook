@@ -10,7 +10,7 @@ pub(crate) const APP_NAME: &str = "claude-permissions-hook";
 
 /// Evaluate a tool request against config rules and return a permission decision.
 ///
-/// Takes domain types only — the caller maps from protocol types (e.g., `HookInput`)
+/// Takes domain types only — the caller maps from hook_adapter types (e.g., `HookInput`)
 /// to `ToolRequest` at the boundary.
 ///
 /// Returns `None` when the hook has no opinion (unrecognized tools, or all
@@ -28,7 +28,7 @@ pub(crate) const APP_NAME: &str = "claude-permissions-hook";
 /// # Examples
 ///
 /// ```
-/// use claude_permissions_hook::protocol::HookInput;
+/// use claude_permissions_hook::hook_adapter::HookInput;
 /// use claude_permissions_hook::domain::Decision;
 /// use claude_permissions_hook::config::Config;
 /// use claude_permissions_hook::decision::evaluate;

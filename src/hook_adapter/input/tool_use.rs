@@ -216,7 +216,7 @@ fn extract_string(value: &Value, field: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::input::WirePermissionMode;
+    use crate::hook_adapter::input::WirePermissionMode;
     use serde_json::json;
 
     const CWD: &str = "/home/user/project";

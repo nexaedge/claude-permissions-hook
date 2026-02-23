@@ -39,12 +39,12 @@ fn ask_rule(pattern: &str, ops: &[FileOperation]) -> FileRule {
     file_rule(pattern, Decision::Ask, ops)
 }
 
-fn file_input(tool: &str, mode: &str, tool_input: serde_json::Value) -> crate::protocol::HookInput {
+fn file_input(tool: &str, mode: &str, tool_input: serde_json::Value) -> crate::hook_adapter::HookInput {
     make_input(tool, mode, tool_input)
 }
 
 /// Extract decision from evaluate result.
-fn file_decision(input: &crate::protocol::HookInput, config: &Config) -> Decision {
+fn file_decision(input: &crate::hook_adapter::HookInput, config: &Config) -> Decision {
     eval(input, Some(config)).unwrap().0
 }
 

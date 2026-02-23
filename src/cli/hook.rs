@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::config::Config;
 use crate::decision;
 use crate::domain::Decision;
-use crate::protocol::HookOutput;
+use crate::hook_adapter::HookOutput;
 
 /// Discover config path when `--config` is not provided.
 ///
@@ -73,7 +73,7 @@ fn execute_from_stdin(
 ) -> Result<Option<HookOutput>, Box<dyn std::error::Error>> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
-    let hook_input: crate::protocol::HookInput = serde_json::from_str(&input)?;
+    let hook_input: crate::hook_adapter::HookInput = serde_json::from_str(&input)?;
 
     let Some(config) = config else {
         return Ok(Some(HookOutput::ask(

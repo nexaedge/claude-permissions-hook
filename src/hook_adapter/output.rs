@@ -16,7 +16,7 @@ impl HookOutput {
     /// # Examples
     ///
     /// ```
-    /// use claude_permissions_hook::protocol::HookOutput;
+    /// use claude_permissions_hook::hook_adapter::HookOutput;
     /// use claude_permissions_hook::domain::Decision;
     ///
     /// let output = HookOutput::allow("git is allowed");
@@ -31,7 +31,7 @@ impl HookOutput {
     /// # Examples
     ///
     /// ```
-    /// use claude_permissions_hook::protocol::HookOutput;
+    /// use claude_permissions_hook::hook_adapter::HookOutput;
     /// use claude_permissions_hook::domain::Decision;
     ///
     /// let output = HookOutput::ask("needs human confirmation");
@@ -46,7 +46,7 @@ impl HookOutput {
     /// # Examples
     ///
     /// ```
-    /// use claude_permissions_hook::protocol::HookOutput;
+    /// use claude_permissions_hook::hook_adapter::HookOutput;
     /// use claude_permissions_hook::domain::Decision;
     ///
     /// let output = HookOutput::deny("blocked by rule");

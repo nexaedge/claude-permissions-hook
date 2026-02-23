@@ -6,7 +6,7 @@ mod reason;
 
 use crate::config::Config;
 use crate::domain::Decision;
-use crate::protocol::HookInput;
+use crate::hook_adapter::HookInput;
 use serde_json::json;
 
 /// Convenience wrapper: converts HookInput → domain types and calls evaluate.

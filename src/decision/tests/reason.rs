@@ -7,7 +7,7 @@ use serde_json::json;
 use std::collections::HashSet;
 
 /// Helper to extract the reason string from an eval() result.
-fn reason_of(input: &crate::protocol::HookInput, config: &Config) -> String {
+fn reason_of(input: &crate::hook_adapter::HookInput, config: &Config) -> String {
     eval(input, Some(config)).unwrap().1
 }
 
@@ -31,11 +31,11 @@ fn make_files_config(files: Vec<FileRule>) -> Config {
     }
 }
 
-fn file_input(tool: &str, mode: &str, tool_input: serde_json::Value) -> crate::protocol::HookInput {
+fn file_input(tool: &str, mode: &str, tool_input: serde_json::Value) -> crate::hook_adapter::HookInput {
     make_input(tool, mode, tool_input)
 }
 
-fn file_reason(input: &crate::protocol::HookInput, config: &Config) -> String {
+fn file_reason(input: &crate::hook_adapter::HookInput, config: &Config) -> String {
     eval(input, Some(config)).unwrap().1
 }
 
