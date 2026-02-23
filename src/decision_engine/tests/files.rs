@@ -39,7 +39,11 @@ fn ask_rule(pattern: &str, ops: &[FileOperation]) -> FileRule {
     file_rule(pattern, Decision::Ask, ops)
 }
 
-fn file_input(tool: &str, mode: &str, tool_input: serde_json::Value) -> crate::hook_adapter::HookInput {
+fn file_input(
+    tool: &str,
+    mode: &str,
+    tool_input: serde_json::Value,
+) -> crate::hook_adapter::HookInput {
     make_input(tool, mode, tool_input)
 }
 

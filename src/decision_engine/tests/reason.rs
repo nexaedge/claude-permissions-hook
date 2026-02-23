@@ -31,7 +31,11 @@ fn make_files_config(files: Vec<FileRule>) -> Config {
     }
 }
 
-fn file_input(tool: &str, mode: &str, tool_input: serde_json::Value) -> crate::hook_adapter::HookInput {
+fn file_input(
+    tool: &str,
+    mode: &str,
+    tool_input: serde_json::Value,
+) -> crate::hook_adapter::HookInput {
     make_input(tool, mode, tool_input)
 }
 

@@ -683,28 +683,19 @@ mod tests {
     #[test]
     fn match_subcommands_and_required_flags() {
         let r = rule_subcommands_with_flags("git", &[&["push"]], &["--force"]);
-        assert!(matches(
-            &r,
-            &seg("git", &["push", "--force", "origin"])
-        ));
+        assert!(matches(&r, &seg("git", &["push", "--force", "origin"])));
     }
 
     #[test]
     fn match_subcommands_and_required_flags_flag_before() {
         let r = rule_subcommands_with_flags("git", &[&["push"]], &["--force"]);
-        assert!(matches(
-            &r,
-            &seg("git", &["--force", "push", "origin"])
-        ));
+        assert!(matches(&r, &seg("git", &["--force", "push", "origin"])));
     }
 
     #[test]
     fn match_subcommands_and_required_flags_flag_at_end() {
         let r = rule_subcommands_with_flags("git", &[&["push"]], &["--force"]);
-        assert!(matches(
-            &r,
-            &seg("git", &["push", "origin", "--force"])
-        ));
+        assert!(matches(&r, &seg("git", &["push", "origin", "--force"])));
     }
 
     #[test]
@@ -854,10 +845,7 @@ mod tests {
     #[test]
     fn no_match_subcommands_ok_positionals_missing() {
         let r = rule_subcommands_with_positionals("git", &[&["push"]], &["origin"]);
-        assert!(!matches(
-            &r,
-            &seg("git", &["push", "upstream", "main"])
-        ));
+        assert!(!matches(&r, &seg("git", &["push", "upstream", "main"])));
     }
 
     #[test]
@@ -900,20 +888,14 @@ mod tests {
     fn match_subcommands_and_optional_flags_first_flag() {
         let r =
             rule_subcommands_with_optional_flags("git", &[&["push"]], &["--force", "--no-verify"]);
-        assert!(matches(
-            &r,
-            &seg("git", &["push", "--force", "origin"])
-        ));
+        assert!(matches(&r, &seg("git", &["push", "--force", "origin"])));
     }
 
     #[test]
     fn match_subcommands_and_optional_flags_second_flag() {
         let r =
             rule_subcommands_with_optional_flags("git", &[&["push"]], &["--force", "--no-verify"]);
-        assert!(matches(
-            &r,
-            &seg("git", &["push", "--no-verify", "origin"])
-        ));
+        assert!(matches(&r, &seg("git", &["push", "--no-verify", "origin"])));
     }
 
     #[test]
@@ -957,10 +939,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        assert!(matches(
-            &r,
-            &seg("git", &["push", "origin", "main"])
-        ));
+        assert!(matches(&r, &seg("git", &["push", "origin", "main"])));
     }
 
     #[test]
@@ -974,10 +953,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        assert!(!matches(
-            &r,
-            &seg("git", &["push", "upstream", "main"])
-        ));
+        assert!(!matches(&r, &seg("git", &["push", "upstream", "main"])));
     }
 
     #[test]

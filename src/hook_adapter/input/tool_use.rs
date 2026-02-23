@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::shell_parser;
 use crate::domain::path;
 use crate::domain::CommandSegment;
 use crate::domain::FileOperation;
 use crate::domain::FileTarget;
 use crate::domain::PolicySet;
 use crate::error::ToolParseError;
+use crate::shell_parser;
 
 use super::RawHookInput;
 

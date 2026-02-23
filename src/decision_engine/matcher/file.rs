@@ -28,7 +28,6 @@ pub(crate) fn matches(
 mod tests {
     use super::*;
     use crate::domain::rule::files::PathPattern;
-    use std::collections::HashSet;
 
     fn make_rule(decision: Decision, expanded: &str, operations: &[FileOperation]) -> FileRule {
         FileRule {
